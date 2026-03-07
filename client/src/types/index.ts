@@ -2,6 +2,7 @@ export type PimpyEmotion = 'happy' | 'smiling' | 'thinking' | 'sad' | 'crying' |
 
 export type AppPhase =
   | 'upload'
+  | 'loading'
   | 'generating'
   | 'questioning'
   | 'typing'

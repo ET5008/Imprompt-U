@@ -17,7 +17,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       className={`flex ${isAI ? 'justify-start' : 'justify-end'} mb-3`}
     >
       <div
-        className={`max-w-[80%] px-4 py-3 font-body text-sm leading-relaxed text-[#452B2B] ${
+        className={`max-w-[80%] px-4 py-3 font-body text-sm leading-relaxed text-[#452B2B] break-words whitespace-pre-wrap ${
           isAI ? 'ai-bubble' : 'user-bubble'
         }`}
       >

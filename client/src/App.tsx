@@ -19,12 +19,33 @@ function MainContent() {
 
   const emotion = usePimpyState(state.phase, lastMessage, state.silenceStartedAt);
   const isUploadPhase = state.phase === 'upload';
+  const isLoadingPhase = state.phase === 'loading';
   const isCompletePhase = state.phase === 'complete';
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <AnimatePresence mode="wait">
-        {isCompletePhase && state.summary ? (
+        {isLoadingPhase ? (
+          <motion.div
+            key="loading"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.97 }}
+            transition={{ duration: 0.35 }}
+            className="flex-1 flex flex-col items-center justify-center gap-6"
+          >
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              <Pimpy emotion="happy" size={260} />
+            </motion.div>
+            <div className="text-center">
+              <p className="font-sketch text-4xl text-[#452B2B]">Reading your notes...</p>
+              <p className="font-body text-sm text-[#6B4545] mt-2">Pimpy is studying hard!</p>
+            </div>
+          </motion.div>
+        ) : isCompletePhase && state.summary ? (
           <motion.div
             key="summary"
             initial={{ opacity: 0, y: 20 }}
@@ -171,13 +192,15 @@ function MainContent() {
             {/* Pimpy — large, centered, top half */}
             <div className="relative flex flex-col items-center justify-center gap-2 py-6 shrink-0" style={{ minHeight: '45vh' }}>
               {/* Home button */}
-              <button
+              <motion.button
                 onClick={() => dispatch({ type: 'START_NEW_CHAT' })}
                 title="Back to home"
+                animate={{ x: state.sidebarOpen ? 280 : 0 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 32 }}
                 className="absolute top-3 left-4 sketch-card px-3 py-1.5 font-sketch text-sm text-[#452B2B] hover:bg-[#F3C8D7]/40 transition-colors cursor-pointer flex items-center gap-1.5"
               >
                 ← Home
-              </button>
+              </motion.button>
 
               <Pimpy emotion={emotion} size={300} />
               <p className="font-sketch text-xl text-fg-muted">

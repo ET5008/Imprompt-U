@@ -26,8 +26,11 @@ export function InputBar() {
     dispatch({ type: 'SET_SILENCE_START', time: new Date() });
   }, [state.phase, dispatch]);
 
+  const MAX_CHARS = 1200;
+
   // Reset silence timer on keystroke
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    if (e.target.value.length > MAX_CHARS) return;
     setText(e.target.value);
     dispatch({ type: 'SET_PHASE', phase: 'typing' });
     dispatch({ type: 'SET_SILENCE_START', time: null });
@@ -84,18 +87,25 @@ export function InputBar() {
         isSupported={isSupported}
         onToggle={handleVoiceToggle}
       />
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        disabled={isDisabled}
-        placeholder={
-          isDisabled ? 'Pimpy is thinking...' : 'Explain it to Pimpy... (Enter to send)'
-        }
-        rows={1}
-        className="flex-1 resize-none border-sketch bg-[#FDF6F0] px-4 py-2.5 font-body text-sm text-[#452B2B] placeholder:text-[#6B4545]/60 outline-none focus:ring-2 focus:ring-[#452B2B]/30 rounded-[10px] min-h-[44px] max-h-[160px] overflow-y-auto disabled:opacity-50"
-      />
+      <div className="flex-1 flex flex-col gap-1">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          disabled={isDisabled}
+          placeholder={
+            isDisabled ? 'Pimpy is thinking...' : 'Explain it to Pimpy... (Enter to send)'
+          }
+          rows={1}
+          className="w-full resize-none border-sketch bg-[#FDF6F0] px-4 py-2.5 font-body text-sm text-[#452B2B] placeholder:text-[#6B4545]/60 outline-none focus:ring-2 focus:ring-[#452B2B]/30 rounded-[10px] min-h-[44px] max-h-[160px] overflow-y-auto disabled:opacity-50"
+        />
+        {text.length > 0 && (
+          <p className={`font-body text-xs text-right pr-1 ${text.length >= MAX_CHARS ? 'text-red-500' : 'text-[#6B4545]/60'}`}>
+            {text.length}/{MAX_CHARS}
+          </p>
+        )}
+      </div>
       <button
         onClick={handleSubmit}
         disabled={!text.trim() || isDisabled}

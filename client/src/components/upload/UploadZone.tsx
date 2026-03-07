@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useAppContext } from '../../context/AppContext';
 import { FileList } from './FileList';
@@ -13,8 +12,6 @@ function generateId(): string {
 export function UploadZone() {
   const { state, dispatch } = useAppContext();
   const { uploadFiles } = useChatSession();
-  const [isStarting, setIsStarting] = useState(false);
-
   const hasFile = state.uploadedFiles.length > 0;
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -34,9 +31,9 @@ export function UploadZone() {
 
   async function handleStart() {
     if (state.uploadedFiles.length === 0) return;
-    setIsStarting(true);
+    dispatch({ type: 'SET_PHASE', phase: 'loading' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
     await uploadFiles(state.uploadedFiles);
-    setIsStarting(false);
   }
 
   return (
@@ -67,10 +64,10 @@ export function UploadZone() {
         variant="primary"
         size="lg"
         className="mt-2 w-full"
-        disabled={state.uploadedFiles.length === 0 || isStarting}
+        disabled={state.uploadedFiles.length === 0}
         onClick={handleStart}
       >
-        {isStarting ? 'Getting ready...' : 'Start Teaching Pimpy!'}
+        Start Teaching Pimpy!
       </Button>
     </div>
   );
