@@ -10,18 +10,13 @@
   --color-cream: #FDF6F0;
   --color-yellow: #F5D76E;
 
-  /* Dark mode palette */
-  --color-dark-bg: #1a0f0f;
-  --color-dark-card: #2d1a1a;
-  --color-dark-border: #EDBBAB;
-
   /* Typography */
   --font-sketch: 'Caveat', cursive;
   --font-body: 'Nunito', sans-serif;
 }
 
 /* ========================
-   COLOR TOKENS (light / dark)
+   COLOR TOKENS (light)
    ======================== */
 
 :root {
@@ -31,15 +26,6 @@
   --bg-primary:   #EDBBAB;
   --bg-card:      #FDF6F0;
   --border-color: #452B2B;
-}
-
-[data-theme="dark"] {
-  --fg-primary:   #EDBBAB;
-  --fg-muted:     #c49090;
-  --fg-inverted:  #1a0f0f;
-  --bg-primary:   #1a0f0f;
-  --bg-card:      #2d1a1a;
-  --border-color: #EDBBAB;
 }
 
 /* ========================
@@ -81,14 +67,9 @@ body::before {
     linear-gradient(to right, rgba(69,43,43,0.07) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(69,43,43,0.07) 1px, transparent 1px);
   background-size: 48px 48px;
-  animation: grid-slide 10s linear infinite;
+  animation: grid-slide 2s linear infinite;
 }
 
-[data-theme="dark"] body::before {
-  background-image:
-    linear-gradient(to right, rgba(237,187,171,0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(237,187,171,0.06) 1px, transparent 1px);
-}
 
 #root {
   position: relative;
@@ -99,73 +80,6 @@ body::before {
 .text-fg-primary { color: var(--fg-primary); }
 .text-fg-muted   { color: var(--fg-muted); }
 .text-fg-inverted { color: var(--fg-inverted); }
-
-/* ========================
-   DARK MODE
-   ======================== */
-
-[data-theme="dark"] body {
-  background-color: #1a0f0f;
-  color: #EDBBAB;
-}
-
-[data-theme="dark"] .sketch-card {
-  background-color: #2d1a1a;
-  border-color: #EDBBAB;
-  box-shadow: 3px 3px 0px #EDBBAB;
-}
-
-[data-theme="dark"] .sketch-card-lg {
-  background-color: #2d1a1a;
-  border-color: #EDBBAB;
-  box-shadow: 5px 5px 0px #EDBBAB;
-}
-
-[data-theme="dark"] .border-sketch {
-  border-color: #EDBBAB;
-  box-shadow: 3px 3px 0px #EDBBAB;
-}
-
-[data-theme="dark"] .upload-zone {
-  border-color: #EDBBAB;
-  background-color: #2d1a1a;
-}
-
-[data-theme="dark"] .upload-zone:hover,
-[data-theme="dark"] .upload-zone.drag-active {
-  background-color: #3d2a2a;
-  border-color: #F3C8D7;
-}
-
-[data-theme="dark"] .sidebar {
-  background-color: #2d1a1a;
-  border-right-color: #EDBBAB;
-}
-
-[data-theme="dark"] .ai-bubble {
-  background-color: #3d2020;
-  border-color: #EDBBAB;
-}
-
-[data-theme="dark"] .user-bubble {
-  background-color: #1e2d1e;
-  border-color: #EDBBAB;
-}
-
-[data-theme="dark"] .input-bar {
-  background-color: #2d1a1a;
-  border-top-color: #EDBBAB;
-}
-
-[data-theme="dark"] textarea {
-  background-color: #3d2a2a;
-  color: #EDBBAB;
-  border-color: #EDBBAB;
-}
-
-[data-theme="dark"] textarea::placeholder {
-  color: #a07070;
-}
 
 .pimpy-wrap img {
   filter:
@@ -179,22 +93,6 @@ body::before {
     drop-shadow(0 -3px 0 #FDF6F0);
 }
 
-[data-theme="dark"] .pimpy-wrap {
-  filter: brightness(1.15);
-}
-
-[data-theme="dark"] .pimpy-wrap img {
-  filter:
-    brightness(1.15)
-    drop-shadow(2px 0 0 #2d1a1a)
-    drop-shadow(-2px 0 0 #2d1a1a)
-    drop-shadow(0 2px 0 #2d1a1a)
-    drop-shadow(0 -2px 0 #2d1a1a)
-    drop-shadow(3px 0 0 #2d1a1a)
-    drop-shadow(-3px 0 0 #2d1a1a)
-    drop-shadow(0 3px 0 #2d1a1a)
-    drop-shadow(0 -3px 0 #2d1a1a);
-}
 
 .title-card {
   background: rgba(253,246,240,0.82);
@@ -202,90 +100,6 @@ body::before {
   backdrop-filter: blur(2px);
 }
 
-[data-theme="dark"] .title-card {
-  background: rgba(45,26,26,0.88);
-  box-shadow: 3px 4px 0 rgba(237,187,171,0.12);
-}
-
-/* Override all hardcoded brown text colors in dark mode */
-[data-theme="dark"] .text-\[\#452B2B\] {
-  color: #EDBBAB !important;
-}
-
-[data-theme="dark"] .text-\[\#6B4545\] {
-  color: #c49090 !important;
-}
-
-/* Override hardcoded brown borders in dark mode */
-[data-theme="dark"] .border-\[\#452B2B\] {
-  border-color: #EDBBAB !important;
-}
-
-/* Dark mode chat bubble text */
-[data-theme="dark"] .ai-bubble,
-[data-theme="dark"] .user-bubble {
-  color: #EDBBAB;
-}
-
-/* Dark mode message bubble box-shadow */
-[data-theme="dark"] .ai-bubble,
-[data-theme="dark"] .user-bubble {
-  box-shadow: 2px 2px 0px #EDBBAB;
-}
-
-/* Dark mode send button */
-[data-theme="dark"] button.bg-\[\#452B2B\] {
-  background-color: #EDBBAB !important;
-  color: #1a0f0f !important;
-}
-
-[data-theme="dark"] button.bg-\[\#452B2B\]:hover {
-  background-color: #F3C8D7 !important;
-}
-
-/* Dark mode link input field */
-[data-theme="dark"] input[type="url"] {
-  background-color: #3d2a2a;
-  color: #EDBBAB;
-  border-color: #EDBBAB;
-}
-
-[data-theme="dark"] input[type="url"]::placeholder {
-  color: #a07070;
-}
-
-/* Dark mode file chip remove button */
-[data-theme="dark"] .sketch-card button.bg-\[\#452B2B\] {
-  background-color: #EDBBAB !important;
-  color: #1a0f0f !important;
-}
-
-/* Dark mode Pimpy status text */
-[data-theme="dark"] .chat-panel {
-  border-top-color: #EDBBAB;
-}
-
-/* Dark mode sidebar session cards hover */
-[data-theme="dark"] .sidebar .sketch-card:hover {
-  background-color: #3d2a2a !important;
-}
-
-/* Dark mode sidebar text */
-[data-theme="dark"] .sidebar p,
-[data-theme="dark"] .sidebar h2,
-[data-theme="dark"] .sidebar button {
-  color: #EDBBAB;
-}
-
-/* Dark mode upload zone text */
-[data-theme="dark"] .upload-zone p {
-  color: #EDBBAB;
-}
-
-/* Dark mode scrollbar */
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background-color: #EDBBAB;
-}
 
 /* ========================
    SKETCHBOOK UTILITIES
@@ -403,9 +217,6 @@ body::before {
   transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
-[data-theme="dark"] .chat-panel {
-  background-color: #2d1a1a;
-}
 
 /* ========================
    SIDEBAR
