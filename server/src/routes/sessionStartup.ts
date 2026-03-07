@@ -1,57 +1,62 @@
-interface Message {
-    role: 'user' | 'assistant';
-    content: string;
-    timestamp: Date;
-}
+import { Router, Request, Response } from 'express';
+import { supabase } from '../lib/supabase';
 
-class ReviewSession {
-    sessionId: string;
-    topicId: string;
-    systemPrompt: string;
-    messages: Message[];
-    mastery: number;
-    masteryReached: boolean;
+const sessionStartupRouter = Router();
 
-    constructor(sessionId: string, topicId: string, systemPrompt: string) {
-        this.sessionId = sessionId;
-        this.topicId = topicId;
-        this.systemPrompt = systemPrompt;
-        this.messages = [];
-        this.mastery = 0;
-        this.masteryReached = false;
-    }
+sessionStartupRouter.post('/start', async (req: Request, res: Response) => {
+  const { topicId } = req.body as { topicId?: string };
 
-    addMessage(message: Message) {
-        this.messages.push(message);
-    }
+  if (!topicId) {
+    res.status(400).json({ error: 'topicId is required' });
+    return;
+  }
 
-    isMasteryReached() {
-        return this.mastery >= 100;
-    }
-}
+  // Fetch topic content from Supabase
+  const { data: topic, error: topicError } = await supabase
+    .from('topics')
+    .select('id, title, content')
+    .eq('id', topicId)
+    .single();
 
-const createReviewSession = (sessionId: string, topicId: string): ReviewSession => {
-    const topic = sessions.get(sessionId)?.topics.find(topic => topic.id === topicId);
-    if (!topic) {
-        throw new Error(`Topic ${topicId} not found for session ${sessionId}`);
-    }
+  if (topicError || !topic) {
+    res.status(404).json({ error: 'Topic not found' });
+    return;
+  }
 
-    const systemPrompt = `
-    You are a Socratic tutor helping a student master the following topic: "${topic.title}".
-    
-    Your role is to guide the student to understanding through questions — never lecture or give answers directly. 
-    Ask the student to explain concepts in their own words, probe with follow-ups, present edge cases, and 
-    correct misconceptions gently by asking better questions.
-    
-    When you're confident the student has demonstrated mastery, say so explicitly and summarize what they've learned.
-    
-    ## Reference Material
-    The following is the full text of the relevant chapter. Use it as your source of truth.
-    
-    ---
-    ${topic.content}
-    ---
-    `;
+  const systemPrompt = `You are a Socratic tutor helping a student master the following topic: "${topic.title}".
 
-    return new ReviewSession(sessionId, topicId, systemPrompt);
-}
+Your role is to guide the student to understanding through questions — never lecture or give answers directly.
+Ask the student to explain concepts in their own words, probe with follow-ups, present edge cases, and
+correct misconceptions gently by asking better questions.
+
+When you are fully confident the student has demonstrated mastery of all key concepts, end your message with the token [MASTERY_REACHED] on its own line.
+
+## Reference Material
+The following is the full text of the relevant chapter. Use it as your source of truth.
+
+---
+${topic.content}
+---`;
+
+  const { data: reviewSession, error: insertError } = await supabase
+    .from('review_sessions')
+    .insert({
+      topic_id: topicId,
+      system_prompt: systemPrompt,
+      chapter_content: topic.content,
+      total_concepts: 0,
+      mastery_percent: 0,
+      mastery_reached: false,
+    })
+    .select('id')
+    .single();
+
+  if (insertError || !reviewSession) {
+    res.status(500).json({ error: 'Failed to create review session' });
+    return;
+  }
+
+  res.status(201).json({ reviewKey: reviewSession.id });
+});
+
+export default sessionStartupRouter;

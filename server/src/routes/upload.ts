@@ -442,8 +442,8 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     const { data: savedTopics, error: topicsError } = await supabase
       .from('topics')
       .insert(topicRows)
-      .select('id, title, chapter')
-      .order('id', { ascending: true });
+      .select('id, title, chapter, topic_order')
+      .order('topic_order', { ascending: true });
 
     if (topicsError) {
       throw new Error(`Failed to store topics: ${topicsError.message}`);
