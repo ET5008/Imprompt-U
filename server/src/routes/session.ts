@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
-import { reviewStore } from '../store';
-import { Message } from '../types';
+import { supabase } from '../lib/supabase';
 
 const sessionRouter = Router();
 
@@ -9,6 +8,27 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
 const GAP_MODEL = 'claude-haiku-4-5-20251001';
+
+// --- Types ---
+
+interface DbMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+interface DbReviewSession {
+  id: string;
+  topic_id: string;
+  system_prompt: string;
+  chapter_content: string;
+  total_concepts: number;
+  mastery_percent: number;
+  mastery_reached: boolean;
+  topics: { title: string } | null;
+  messages: DbMessage[];
+}
 
 // --- Knowledge Gap Analysis ---
 
@@ -57,8 +77,8 @@ ${chapterPrompt}`,
   return { gapText, remainingCount: countBullets(gapText) };
 }
 
-function formatGapContext(gapText: string): string {
-  if (!gapText) return '';
+function formatGapContext(gapText: string, remainingCount: number): string {
+  if (!gapText || remainingCount === 0) return '';
   return `\n\n--- KNOWLEDGE GAP ANALYSIS ---\nConcepts the student has NOT yet demonstrated understanding of:\n${gapText}\n\nFocus your next question on one of these gaps. Do not re-ask about concepts already understood.\n--- END ANALYSIS ---`;
 }
 
@@ -81,10 +101,7 @@ async function streamSocraticResponse(
         text: chapterPrompt,
         cache_control: { type: 'ephemeral' },
       },
-      {
-        type: 'text',
-        text: gapContext,
-      },
+      ...(gapContext ? [{ type: 'text' as const, text: gapContext }] : []),
     ],
     messages: apiMessages,
   });
@@ -108,18 +125,39 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
     return;
   }
 
-  const reviewSession = reviewStore.get(reviewKey);
-  if (!reviewSession) {
+  const sanitizedContent = content.replace(/\[MASTERY_REACHED\]/gi, '').trim();
+  if (!sanitizedContent) {
+    res.status(400).json({ error: 'Message content is empty after sanitization' });
+    return;
+  }
+
+  // Load review session + messages from Supabase
+  const { data: reviewSession, error: sessionError } = await supabase
+    .from('review_sessions')
+    .select('*, topics(title), messages(*)')
+    .eq('id', reviewKey)
+    .order('created_at', { referencedTable: 'messages', ascending: true })
+    .single() as { data: DbReviewSession | null; error: unknown };
+
+  if (sessionError || !reviewSession) {
     res.status(404).json({ error: 'Review session not found' });
     return;
   }
 
-  if (reviewSession.masteryReached) {
+  if (reviewSession.mastery_reached) {
     res.status(400).json({ error: 'Session already completed' });
     return;
   }
 
-  reviewSession.messages.push({ role: 'user', content, timestamp: new Date() });
+  // Insert user message
+  const { error: insertError } = await supabase
+    .from('messages')
+    .insert({ review_session_id: reviewKey, role: 'user', content: sanitizedContent });
+
+  if (insertError) {
+    res.status(500).json({ error: 'Failed to save message' });
+    return;
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -127,62 +165,73 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no');
 
   try {
-    const isFirstTurn = reviewSession.messages.filter((m: Message) => m.role === 'user').length === 1;
+    const allMessages = [...reviewSession.messages, { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' }];
+    const userMessages = allMessages.filter(m => m.role === 'user').map(m => m.content);
+    const isFirstTurn = userMessages.length === 1;
 
     if (isFirstTurn) {
-      const openingPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${reviewSession.topicTitle}** — don't look anything up, just share what comes to mind.`;
+      const topicTitle = reviewSession.topics?.title ?? 'this topic';
+      const openingPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${topicTitle}** — don't look anything up, just share what comes to mind.`;
       res.write(`data: ${JSON.stringify({ chunk: openingPrompt })}\n\n`);
-      reviewSession.messages.push({ role: 'assistant', content: openingPrompt, timestamp: new Date() });
+
+      await supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: openingPrompt });
+
       res.write(`data: ${JSON.stringify({ done: true, masteryReached: false, masteryPercent: 0 })}\n\n`);
       res.end();
       return;
     }
 
-    const userMessages = reviewSession.messages
-      .filter((m: Message) => m.role === 'user')
-      .map((m: Message) => m.content);
+    const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
 
-    const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.systemPrompt, userMessages);
-
-    // On the first turn, lock in the total concept count
-    if (reviewSession.totalConcepts === 0 && remainingCount > 0) {
-      reviewSession.totalConcepts = remainingCount;
+    // Lock in total concepts on the second turn (first real recall turn).
+    // Use a conditional update (eq total_concepts = 0) to prevent race conditions
+    // if two requests arrive simultaneously before the baseline is written.
+    let totalConcepts = reviewSession.total_concepts;
+    if (totalConcepts === 0 && remainingCount > 0) {
+      totalConcepts = remainingCount;
+      await supabase
+        .from('review_sessions')
+        .update({ total_concepts: totalConcepts })
+        .eq('id', reviewKey)
+        .eq('total_concepts', 0);
     }
 
-    const masteryPercent = reviewSession.totalConcepts > 0
-      ? Math.round(((reviewSession.totalConcepts - remainingCount) / reviewSession.totalConcepts) * 100)
+    const masteryPercent = totalConcepts > 0
+      ? Math.round(((totalConcepts - remainingCount) / totalConcepts) * 100)
       : 0;
 
-    const gapContext = formatGapContext(gapText);
-
-    const apiMessages = reviewSession.messages.map((m: Message) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const gapContext = formatGapContext(gapText, remainingCount);
+    const apiMessages = allMessages.map(m => ({ role: m.role, content: m.content }));
 
     const fullResponse = await streamSocraticResponse(
-      reviewSession.systemPrompt,
+      reviewSession.system_prompt,
       gapContext,
       apiMessages,
       res
     );
 
     const masteryReached = fullResponse.includes('[MASTERY_REACHED]');
-    const cleanedResponse = fullResponse.replace('[MASTERY_REACHED]', '').trimEnd();
+    const cleanedResponse = fullResponse.replace(/\[MASTERY_REACHED\]/g, '').trimEnd();
 
-    reviewSession.messages.push({ role: 'assistant', content: cleanedResponse, timestamp: new Date() });
-
-    if (masteryReached) reviewSession.masteryReached = true;
+    // Persist assistant message and updated mastery state
+    await Promise.all([
+      supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: cleanedResponse }),
+      supabase.from('review_sessions').update({
+        mastery_percent: masteryReached ? 100 : masteryPercent,
+        ...(masteryReached ? { mastery_reached: true } : {}),
+      }).eq('id', reviewKey),
+    ]);
 
     res.write(`data: ${JSON.stringify({ done: true, masteryReached, masteryPercent: masteryReached ? 100 : masteryPercent })}\n\n`);
     res.end();
   } catch (err) {
+    console.error('[session/message] Stream error:', err);
     res.write(`data: ${JSON.stringify({ error: 'Stream failed' })}\n\n`);
     res.end();
   }
 });
 
-sessionRouter.get('/mastery', (req: Request, res: Response) => {
+sessionRouter.get('/mastery', async (req: Request, res: Response) => {
   const { reviewKey } = req.query as { reviewKey?: string };
 
   if (!reviewKey) {
@@ -190,17 +239,21 @@ sessionRouter.get('/mastery', (req: Request, res: Response) => {
     return;
   }
 
-  const reviewSession = reviewStore.get(reviewKey);
-  if (!reviewSession) {
+  const { data, error } = await supabase
+    .from('review_sessions')
+    .select('mastery_reached, mastery_percent, messages(count)')
+    .eq('id', reviewKey)
+    .single();
+
+  if (error || !data) {
     res.status(404).json({ error: 'Review session not found' });
     return;
   }
 
-  const userMessages = reviewSession.messages.filter((m: Message) => m.role === 'user');
-
   res.json({
-    masteryReached: reviewSession.masteryReached,
-    turnCount: userMessages.length,
+    masteryReached: data.mastery_reached,
+    masteryPercent: data.mastery_percent,
+    turnCount: (data.messages as unknown as { count: number }[])[0]?.count ?? 0,
   });
 });
 

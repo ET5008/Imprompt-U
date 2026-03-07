@@ -82,7 +82,7 @@ ${fullText}
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 16000,
       messages: [
         {
@@ -236,15 +236,15 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     const { data: savedTopics, error: topicsError } = await supabase
       .from('topics')
       .insert(topicRows)
-      .select('id, title, chapter')
-      .order('id', { ascending: true });
+      .select('id, title, chapter, topic_order')
+      .order('topic_order', { ascending: true });
 
     if (topicsError) {
       throw new Error(`Failed to store topics: ${topicsError.message}`);
     }
 
     return res.status(200).json({
-      sessionId: textbook.session_id,
+      textbookId: textbook.session_id,
       topics: savedTopics ?? [],
     });
   } catch (err) {
