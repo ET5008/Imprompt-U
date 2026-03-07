@@ -1,232 +1,438 @@
 import { Router } from 'express';
 import multer from 'multer';
-import * as pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { supabase } from '../lib/supabase';
 
 const router = Router();
 
+const uploadTempDir = path.join(os.tmpdir(), 'imprompt-u-upload');
+fs.mkdirSync(uploadTempDir, { recursive: true });
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadTempDir),
+    filename: (_req, file, cb) =>
+      cb(null, `${Date.now()}-${randomUUID()}-${sanitizeFilename(file.originalname)}`),
+  }),
   limits: {
     fileSize: 25 * 1024 * 1024,
   },
 });
 
-type ClaudeTopic = {
+type ParsedTopic = {
   title: string;
   chapter?: string | null;
   content: string;
 };
 
-type ClaudeResponse = {
-  content?: Array<{ type: string; text?: string }>;
+type TocEntry = {
+  title: string;
+  chapter: string | null;
+  bookPage: number;
+  pdfStartPage: number;
 };
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
+type TextbookRow = {
+  id: string;
+  session_id: string;
+  filename: string;
+  storage_path: string;
+};
 
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[^\w.\-]/g, '-');
 }
 
-async function splitTextWithClaude(fullText: string): Promise<ClaudeTopic[]> {
-  const anthropicApiKey = requireEnv('ANTHROPIC_API_KEY');
-
-  const prompt = `
-You are helping parse a textbook for a study application.
-
-I will give you raw text extracted from a textbook PDF.
-Split it into logical study topics based on chapter and section headings.
-
-Return ONLY valid JSON.
-Do not use markdown fences.
-Do not include any explanation.
-
-Use exactly this shape:
-{
-  "topics": [
-    {
-      "title": "3.1 Kinematics",
-      "chapter": "Chapter 3",
-      "content": "full text for this section"
-    }
-  ]
+function cleanLine(line: string): string {
+  return line.replace(/\s+/g, ' ').trim();
 }
 
-Rules:
-- Preserve the original textbook wording as much as possible.
-- Prefer section-level chunks when obvious (like 3.1, 3.2, 4.1).
-- If sections are not obvious, split by chapter.
-- Every topic must have:
-  - title
-  - content
-- chapter can be null if unclear.
-- Do not summarize unless the text is too noisy to preserve exactly.
-- Never omit the topics array.
-
-TEXT:
-${fullText}
-`.trim();
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
-      max_tokens: 16000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Claude request failed: ${response.status} ${errorText}`);
+function parsePrintedPageFromLine(line: string): number | null {
+  const match = line.trim().match(/^[-–—\s]*([0-9]{1,4})[-–—\s]*$/);
+  if (!match) {
+    return null;
   }
 
-  const data = (await response.json()) as ClaudeResponse;
-
-  const textBlock = data.content?.find(
-    (block) => block.type === 'text' && typeof block.text === 'string'
-  )?.text;
-
-  if (!textBlock) {
-    throw new Error('Claude returned no text block');
+  const value = Number(match[1]);
+  if (!Number.isInteger(value) || value <= 0) {
+    return null;
   }
 
-  let parsed: { topics: ClaudeTopic[] };
+  return value;
+}
+
+function extractPrintedPageNumber(pageText: string): number | null {
+  const lines = pageText
+    .split('\n')
+    .map(cleanLine)
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const candidates = [
+    ...lines.slice(0, 3),
+    ...lines.slice(Math.max(0, lines.length - 3)),
+  ];
+
+  for (const line of candidates) {
+    const value = parsePrintedPageFromLine(line);
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function detectBookToPdfOffset(pageTexts: string[]): number {
+  const printedPages = pageTexts.map(extractPrintedPageNumber);
+
+  let bestIndex = -1;
+  let bestPrintedPage = -1;
+  let bestScore = -1;
+
+  for (let i = 0; i < printedPages.length; i += 1) {
+    const current = printedPages[i];
+    if (current === null) {
+      continue;
+    }
+
+    let score = 0;
+    for (let delta = 1; delta <= 6 && i + delta < printedPages.length; delta += 1) {
+      if (printedPages[i + delta] === current + delta) {
+        score += 1;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+      bestPrintedPage = current;
+    }
+  }
+
+  if (bestIndex < 0) {
+    return 0;
+  }
+
+  return bestIndex + 1 - bestPrintedPage;
+}
+
+function parseTocLinesFromPage(pageText: string): TocEntry[] {
+  const lines = pageText
+    .split('\n')
+    .map(cleanLine)
+    .filter((line) => line.length > 0);
+
+  const entries: TocEntry[] = [];
+
+  for (const line of lines) {
+    // Example: "Chapter 3 Kinematics ........ 42" or "3.1 Motion 45"
+    const match = line.match(
+      /^(.{3,}?)\s(?:\.{2,}|\s{2,}|·{2,})\s*([0-9]{1,4})$/
+    );
+    if (!match) {
+      continue;
+    }
+
+    const rawTitle = cleanLine(match[1]);
+    const pageNum = Number(match[2]);
+
+    if (!rawTitle || !Number.isInteger(pageNum) || pageNum <= 0) {
+      continue;
+    }
+
+    const chapterMatch = rawTitle.match(/(chapter\s+[0-9ivxlcdm]+)/i);
+    entries.push({
+      title: rawTitle,
+      chapter: chapterMatch ? chapterMatch[1] : null,
+      bookPage: pageNum,
+      pdfStartPage: -1,
+    });
+  }
+
+  return entries;
+}
+
+function extractTocEntries(pageTexts: string[]): TocEntry[] {
+  const maxScan = Math.min(pageTexts.length, 40);
+  const tocStart = pageTexts
+    .slice(0, maxScan)
+    .findIndex((page) => /(^|\n)\s*(table of contents|contents)\s*($|\n)/i.test(page));
+
+  if (tocStart < 0) {
+    return [];
+  }
+
+  const tocEntries: TocEntry[] = [];
+  const tocEnd = Math.min(maxScan, tocStart + 10);
+
+  for (let i = tocStart; i < tocEnd; i += 1) {
+    tocEntries.push(...parseTocLinesFromPage(pageTexts[i]));
+  }
+
+  const deduped = new Map<string, TocEntry>();
+  for (const entry of tocEntries) {
+    const key = `${entry.title.toLowerCase()}|${entry.bookPage}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, entry);
+    }
+  }
+
+  return Array.from(deduped.values());
+}
+
+function mapTocToPdfPages(tocEntries: TocEntry[], offset: number, totalPages: number): TocEntry[] {
+  return tocEntries
+    .map((entry) => ({
+      ...entry,
+      pdfStartPage: entry.bookPage + offset,
+    }))
+    .filter((entry) => entry.pdfStartPage >= 1 && entry.pdfStartPage <= totalPages)
+    .sort((a, b) => a.pdfStartPage - b.pdfStartPage);
+}
+
+function buildTopicsFromTocEntries(pageTexts: string[], mappedEntries: TocEntry[]): ParsedTopic[] {
+  const topics: ParsedTopic[] = [];
+
+  for (let i = 0; i < mappedEntries.length; i += 1) {
+    const current = mappedEntries[i];
+    const next = mappedEntries[i + 1];
+
+    const startIndex = Math.max(0, current.pdfStartPage - 1);
+    const endIndex = next
+      ? Math.max(startIndex, next.pdfStartPage - 2)
+      : pageTexts.length - 1;
+
+    const content = pageTexts.slice(startIndex, endIndex + 1).join('\n\n').trim();
+    if (!content) {
+      continue;
+    }
+
+    topics.push({
+      title: current.title,
+      chapter: current.chapter,
+      content,
+    });
+  }
+
+  return topics;
+}
+
+async function createSignedPdfUrl(bucket: string, storagePath: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(storagePath, 60 * 15);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Failed to create signed URL: ${error?.message || 'unknown error'}`);
+  }
+
+  return data.signedUrl;
+}
+
+async function extractPdfPagesFromUrl(url: string): Promise<{ pageTexts: string[]; numPages: number }> {
+  const parser = new PDFParse({ url });
 
   try {
-    parsed = JSON.parse(textBlock);
-  } catch {
-    const cleaned = textBlock
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim();
+    const info = await parser.getInfo();
+    const numPages = info.total ?? 0;
+    const pageTexts: string[] = [];
 
-    parsed = JSON.parse(cleaned);
+    for (let pageNum = 1; pageNum <= numPages; pageNum += 1) {
+      const pageResult = await parser.getText({ partial: [pageNum] });
+      const text = pageResult.pages[0]?.text?.trim() ?? '';
+      pageTexts.push(text);
+    }
+
+    return { pageTexts, numPages };
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function resolvePdfSource(
+  req: any,
+  bucket: string
+): Promise<{
+  sessionId: string;
+  filename: string;
+  localUploadPath: string | null;
+  storagePath: string;
+  parseUrl: string;
+  shouldUploadToStorage: boolean;
+  existingTextbook: TextbookRow | null;
+}> {
+  if (req.file) {
+    if (req.file.mimetype !== 'application/pdf') {
+      throw new Error('Only PDF files are allowed.');
+    }
+
+    const sessionId = randomUUID();
+    const safeFilename = sanitizeFilename(req.file.originalname);
+    const storagePath = `${sessionId}/${safeFilename}`;
+
+    return {
+      sessionId,
+      filename: req.file.originalname,
+      localUploadPath: req.file.path as string,
+      storagePath,
+      parseUrl: '',
+      shouldUploadToStorage: true,
+      existingTextbook: null,
+    };
   }
 
-  if (!parsed.topics || !Array.isArray(parsed.topics)) {
-    throw new Error('Claude response missing topics array');
+  const textbookId: string | undefined = req.body?.textbookId;
+  const sessionId: string | undefined = req.body?.sessionId;
+
+  if (!textbookId && !sessionId) {
+    throw new Error('Provide either form-data key "pdf" or JSON body with "textbookId"/"sessionId".');
   }
 
-  return parsed.topics
-    .filter(
-      (topic) =>
-        typeof topic.title === 'string' &&
-        typeof topic.content === 'string' &&
-        topic.title.trim().length > 0 &&
-        topic.content.trim().length > 0
-    )
-    .map((topic) => ({
-      title: topic.title.trim(),
-      chapter: topic.chapter?.trim() || null,
-      content: topic.content.trim(),
-    }));
+  let query = supabase
+    .from('textbooks')
+    .select('id, session_id, filename, storage_path')
+    .limit(1);
+
+  if (textbookId) {
+    query = query.eq('id', textbookId);
+  } else {
+    query = query.eq('session_id', sessionId as string);
+  }
+
+  const { data: textbook, error: textbookError } = await query.single<TextbookRow>();
+  if (textbookError || !textbook) {
+    throw new Error(`Textbook not found: ${textbookError?.message || 'unknown error'}`);
+  }
+
+  const parseUrl = await createSignedPdfUrl(bucket, textbook.storage_path);
+
+  return {
+    sessionId: textbook.session_id,
+    filename: textbook.filename,
+    localUploadPath: null,
+    storagePath: textbook.storage_path,
+    parseUrl,
+    shouldUploadToStorage: false,
+    existingTextbook: textbook,
+  };
 }
 
 router.post('/', upload.single('pdf'), async (req, res) => {
   let storagePath: string | null = null;
   let textbookId: string | null = null;
+  let localUploadPath: string | null = null;
+  let createdStorageObject = false;
+  let createdTextbookRow = false;
 
   try {
     const bucket = process.env.SUPABASE_PDF_BUCKET || 'textbooks';
+    const source = await resolvePdfSource(req, bucket);
+    storagePath = source.storagePath;
+    localUploadPath = source.localUploadPath;
 
-    if (!req.file) {
-      return res.status(400).json({
-        error: 'No PDF uploaded. Use form-data with key "pdf".',
-      });
+    // 0) If this is a fresh upload, stream temp file to Storage first
+    if (source.shouldUploadToStorage) {
+      if (!source.localUploadPath) {
+        throw new Error('Uploaded file path missing.');
+      }
+
+      const readStream = fs.createReadStream(source.localUploadPath);
+      const { error: storageError } = await supabase.storage
+        .from(bucket)
+        .upload(source.storagePath, readStream as any, {
+          contentType: 'application/pdf',
+          upsert: false,
+        });
+
+      if (storageError) {
+        throw new Error(`Failed to upload PDF to Supabase Storage: ${storageError.message}`);
+      }
+
+      createdStorageObject = true;
+      source.parseUrl = await createSignedPdfUrl(bucket, source.storagePath);
     }
 
-    if (req.file.mimetype !== 'application/pdf') {
-      return res.status(400).json({
-        error: 'Only PDF files are allowed.',
-      });
-    }
-
-    const sessionId = randomUUID();
-    const buffer = req.file.buffer;
-
-    // 1) Extract text from PDF
-    const parsedPdf = await (pdfParse as any)(buffer);
-    const extractedText = parsedPdf.text?.trim();
-
-    if (!extractedText || extractedText.length < 100) {
+    // 1) Extract per-page text from signed URL (avoids backend full-file download buffer)
+    const { pageTexts, numPages } = await extractPdfPagesFromUrl(source.parseUrl);
+    if (pageTexts.length === 0) {
       return res.status(400).json({
         error: 'Could not extract enough text from this PDF.',
       });
     }
 
-    // 2) Limit size before sending to Claude
-    const maxChars = 120000;
-    const textForClaude =
-      extractedText.length > maxChars
-        ? extractedText.slice(0, maxChars)
-        : extractedText;
-
-    // 3) Ask Claude to split into topics
-    const topics = await splitTextWithClaude(textForClaude);
+    // 2) Detect where printed numeric book page numbering starts and map TOC pages to PDF pages
+    const pageOffset = detectBookToPdfOffset(pageTexts);
+    const tocEntries = extractTocEntries(pageTexts);
+    const mappedEntries = mapTocToPdfPages(tocEntries, pageOffset, numPages);
+    const topics = buildTopicsFromTocEntries(pageTexts, mappedEntries);
 
     if (topics.length === 0) {
       return res.status(400).json({
-        error: 'No chapters or sections could be identified.',
+        error: 'Could not build chapter topics from table of contents.',
       });
     }
 
-    // 4) Upload original PDF to Supabase Storage
-    const safeFilename = sanitizeFilename(req.file.originalname);
-    storagePath = `${sessionId}/${safeFilename}`;
+    // 4) Upsert textbook row
+    if (source.existingTextbook) {
+      textbookId = source.existingTextbook.id;
 
-    const { error: storageError } = await supabase.storage
-      .from(bucket)
-      .upload(storagePath, buffer, {
-        contentType: 'application/pdf',
-        upsert: false,
-      });
+      const { error: textbookUpdateError } = await supabase
+        .from('textbooks')
+        .update({
+          page_count: numPages,
+        })
+        .eq('id', textbookId);
 
-    if (storageError) {
-      throw new Error(`Failed to upload PDF to Supabase Storage: ${storageError.message}`);
+      if (textbookUpdateError) {
+        throw new Error(`Failed to update textbook record: ${textbookUpdateError.message}`);
+      }
+    } else {
+      const { data: textbook, error: textbookError } = await supabase
+        .from('textbooks')
+        .insert({
+          session_id: source.sessionId,
+          filename: source.filename,
+          storage_path: source.storagePath,
+          page_count: numPages,
+        })
+        .select('id, session_id')
+        .single();
+
+      if (textbookError || !textbook) {
+        throw new Error(
+          `Failed to store textbook record: ${textbookError?.message || 'unknown error'}`
+        );
+      }
+
+      textbookId = textbook.id;
+      createdTextbookRow = true;
     }
 
-    // 5) Insert textbook row
-    const { data: textbook, error: textbookError } = await supabase
-      .from('textbooks')
-      .insert({
-        session_id: sessionId,
-        filename: req.file.originalname,
-        storage_path: storagePath,
-        page_count: parsedPdf.numpages ?? null,
-      })
-      .select('id, session_id')
-      .single();
-
-    if (textbookError || !textbook) {
-      throw new Error(
-        `Failed to store textbook record: ${textbookError?.message || 'unknown error'}`
-      );
+    if (!textbookId) {
+      throw new Error('Missing textbook id after upsert.');
     }
 
-    textbookId = textbook.id;
+    // 5) Replace existing topics for this textbook
+    const { error: deleteTopicsError } = await supabase
+      .from('topics')
+      .delete()
+      .eq('textbook_id', textbookId);
 
-    // 6) Insert topic rows
+    if (deleteTopicsError) {
+      throw new Error(`Failed to clear existing topics: ${deleteTopicsError.message}`);
+    }
+
+    // 6) Insert new topic rows
     const topicRows = topics.map((topic, index) => ({
-      textbook_id: textbook.id,
+      textbook_id: textbookId,
       topic_order: index,
       title: topic.title,
       chapter: topic.chapter ?? null,
@@ -244,25 +450,122 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     }
 
     return res.status(200).json({
-      textbookId: textbook.session_id,
+      sessionId: source.sessionId,
+      detectedOffset: pageOffset,
+      tocEntries: mappedEntries.map((entry) => ({
+        title: entry.title,
+        bookPage: entry.bookPage,
+        pdfStartPage: entry.pdfStartPage,
+      })),
       topics: savedTopics ?? [],
     });
   } catch (err) {
     console.error(err);
 
     // rollback database row if textbook was inserted but later step failed
-    if (textbookId) {
+    if (createdTextbookRow && textbookId) {
       await supabase.from('textbooks').delete().eq('id', textbookId);
     }
 
     // rollback uploaded file if storage upload succeeded but later step failed
-    if (storagePath) {
+    if (createdStorageObject && storagePath) {
       const bucket = process.env.SUPABASE_PDF_BUCKET || 'textbooks';
       await supabase.storage.from(bucket).remove([storagePath]);
     }
 
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Upload failed',
+    });
+  } finally {
+    if (localUploadPath && fs.existsSync(localUploadPath)) {
+      fs.unlinkSync(localUploadPath);
+    }
+  }
+});
+
+router.post('/from-db', async (req, res) => {
+  try {
+    const bucket = process.env.SUPABASE_PDF_BUCKET || 'textbooks';
+
+    const source = await resolvePdfSource({ body: req.body }, bucket);
+    if (!source.existingTextbook) {
+      return res.status(400).json({
+        error: 'Use textbookId/sessionId for an existing stored PDF.',
+      });
+    }
+
+    const { pageTexts, numPages } = await extractPdfPagesFromUrl(source.parseUrl);
+    if (pageTexts.length === 0) {
+      return res.status(400).json({
+        error: 'Could not extract enough text from this PDF.',
+      });
+    }
+
+    const pageOffset = detectBookToPdfOffset(pageTexts);
+    const tocEntries = extractTocEntries(pageTexts);
+    const mappedEntries = mapTocToPdfPages(tocEntries, pageOffset, numPages);
+    const topics = buildTopicsFromTocEntries(pageTexts, mappedEntries);
+
+    if (topics.length === 0) {
+      return res.status(400).json({
+        error: 'Could not build chapter topics from table of contents.',
+      });
+    }
+
+    const textbookId = source.existingTextbook.id;
+
+    const { error: textbookUpdateError } = await supabase
+      .from('textbooks')
+      .update({
+        page_count: numPages,
+      })
+      .eq('id', textbookId);
+
+    if (textbookUpdateError) {
+      throw new Error(`Failed to update textbook record: ${textbookUpdateError.message}`);
+    }
+
+    const { error: deleteTopicsError } = await supabase
+      .from('topics')
+      .delete()
+      .eq('textbook_id', textbookId);
+
+    if (deleteTopicsError) {
+      throw new Error(`Failed to clear existing topics: ${deleteTopicsError.message}`);
+    }
+
+    const topicRows = topics.map((topic, index) => ({
+      textbook_id: textbookId,
+      topic_order: index,
+      title: topic.title,
+      chapter: topic.chapter ?? null,
+      content: topic.content,
+    }));
+
+    const { data: savedTopics, error: topicsError } = await supabase
+      .from('topics')
+      .insert(topicRows)
+      .select('id, title, chapter')
+      .order('id', { ascending: true });
+
+    if (topicsError) {
+      throw new Error(`Failed to store topics: ${topicsError.message}`);
+    }
+
+    return res.status(200).json({
+      sessionId: source.sessionId,
+      detectedOffset: pageOffset,
+      tocEntries: mappedEntries.map((entry) => ({
+        title: entry.title,
+        bookPage: entry.bookPage,
+        pdfStartPage: entry.pdfStartPage,
+      })),
+      topics: savedTopics ?? [],
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Process from DB failed',
     });
   }
 });
