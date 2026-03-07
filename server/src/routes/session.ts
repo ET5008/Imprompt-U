@@ -127,6 +127,17 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no');
 
   try {
+    const isFirstTurn = reviewSession.messages.filter((m: Message) => m.role === 'user').length === 1;
+
+    if (isFirstTurn) {
+      const openingPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${reviewSession.topicTitle}** — don't look anything up, just share what comes to mind.`;
+      res.write(`data: ${JSON.stringify({ chunk: openingPrompt })}\n\n`);
+      reviewSession.messages.push({ role: 'assistant', content: openingPrompt, timestamp: new Date() });
+      res.write(`data: ${JSON.stringify({ done: true, masteryReached: false, masteryPercent: 0 })}\n\n`);
+      res.end();
+      return;
+    }
+
     const userMessages = reviewSession.messages
       .filter((m: Message) => m.role === 'user')
       .map((m: Message) => m.content);
