@@ -8,22 +8,6 @@ import { ChatWindow } from './components/chat/ChatWindow';
 import { InputBar } from './components/chat/InputBar';
 import { usePimpyState } from './hooks/usePimpyState';
 
-function ThemeToggle() {
-  const { state, dispatch } = useAppContext();
-  const isDark = state.theme === 'dark';
-
-  return (
-    <button
-      onClick={() => dispatch({ type: 'SET_THEME', theme: isDark ? 'ice-cream' : 'dark' })}
-      aria-label="Toggle theme"
-      title={isDark ? 'Switch to ice cream theme' : 'Switch to dark mode'}
-      className="fixed top-4 right-4 z-50 w-10 h-10 rounded-full border-sketch flex items-center justify-center sketch-card hover:scale-105 transition-transform cursor-pointer"
-    >
-      <span className="text-lg">{isDark ? '☀️' : '🌙'}</span>
-    </button>
-  );
-}
-
 function MainContent() {
   const { state, dispatch } = useAppContext();
 
@@ -227,7 +211,6 @@ function AppShell() {
     <div className="relative h-full flex flex-col">
       <SidebarTrigger />
       <Sidebar />
-      <ThemeToggle />
       <main className="flex-1 flex flex-col min-h-0">
         <MainContent />
       </main>
