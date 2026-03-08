@@ -3,6 +3,7 @@ import { AppProvider, useAppContext } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { SidebarTrigger } from './components/layout/SidebarTrigger';
 import { Pimpy } from './components/pimpy/Pimpy';
+import { ChapterSelection } from './components/chapters/ChapterSelection';
 import { UploadZone } from './components/upload/UploadZone';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { InputBar } from './components/chat/InputBar';
@@ -20,6 +21,7 @@ function MainContent() {
   const emotion = usePimpyState(state.phase, lastMessage, state.silenceStartedAt);
   const isUploadPhase = state.phase === 'upload';
   const isLoadingPhase = state.phase === 'loading';
+  const isChaptersPhase = state.phase === 'chapters';
   const isCompletePhase = state.phase === 'complete';
 
   return (
@@ -44,6 +46,17 @@ function MainContent() {
               <p className="font-sketch text-4xl text-brown">Reading your notes...</p>
               <p className="font-body text-sm text-brown-light mt-2">Pimpy is studying hard!</p>
             </div>
+          </motion.div>
+        ) : isChaptersPhase ? (
+          <motion.div
+            key="chapters"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.97 }}
+            transition={{ duration: 0.35 }}
+            className="flex-1 flex flex-col min-h-0 overflow-y-auto"
+          >
+            <ChapterSelection />
           </motion.div>
         ) : isCompletePhase && state.summary ? (
           <motion.div
@@ -106,12 +119,20 @@ function MainContent() {
               </div>
             )}
 
-            <button
-              onClick={() => dispatch({ type: 'START_NEW_CHAT' })}
-              className="btn-sketch border-sketch font-sketch text-xl px-8 py-3 bg-brown text-cream hover:bg-brown-light transition-colors cursor-pointer rounded-[10px]"
-            >
-              Study Another Topic
-            </button>
+            <div className="flex flex-col items-center gap-3">
+              <button
+                onClick={() => dispatch({ type: 'BACK_TO_CHAPTERS' })}
+                className="btn-sketch border-sketch font-sketch text-xl px-8 py-3 bg-[#452B2B] text-[#FDF6F0] hover:bg-[#6B4545] transition-colors cursor-pointer rounded-[10px]"
+              >
+                Back to Chapters
+              </button>
+              <button
+                onClick={() => dispatch({ type: 'START_NEW_CHAT' })}
+                className="sketch-card px-3 py-1.5 font-sketch text-sm text-[#452B2B] hover:bg-[#F3C8D7]/40 transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                ← Home
+              </button>
+            </div>
           </motion.div>
         ) : isUploadPhase ? (
           <motion.div
