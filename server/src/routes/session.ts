@@ -7,7 +7,6 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
 const GAP_MODEL = process.env.ANTHROPIC_GAP_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
-const MAX_GAP_USER_MESSAGES = Number(process.env.MAX_GAP_USER_MESSAGES ?? 6);
 const MAX_CHAT_TURNS = Number(process.env.MAX_CHAT_TURNS ?? 10);
 const MAX_GAP_CONTEXT_CHARS = Number(process.env.MAX_GAP_CONTEXT_CHARS ?? 8000);
 
@@ -30,19 +29,10 @@ interface DbReviewSession {
   messages: DbMessage[] | null;
 }
 
-interface GapResult {
+// Score 0–3 per turn: 0=off-topic/wrong, 1=partial, 2=good, 3=excellent
+interface ScoreResult {
+  score: 0 | 1 | 2 | 3;
   gapText: string;
-  remainingCount: number;
-}
-
-function countGapItems(text: string): number {
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  // Accept bullets, numbered lists, and short standalone concept lines.
-  return lines.filter((line) => /^([-*•]|\d+[.)])\s+/.test(line) || line.split(' ').length <= 12).length;
 }
 
 function trimContext(text: string, maxChars: number): string {
@@ -51,38 +41,43 @@ function trimContext(text: string, maxChars: number): string {
   return `${compact.slice(0, maxChars)} [truncated]`;
 }
 
-async function buildKnowledgeGap(chapterPrompt: string, userMessages: string[]): Promise<GapResult> {
-  if (userMessages.length === 0) return { gapText: '', remainingCount: 0 };
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is missing');
-  }
+async function scoreAnswer(
+  chapterContent: string,
+  question: string,
+  answer: string
+): Promise<ScoreResult> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is missing');
 
   try {
     const response = await anthropic.messages.create({
       model: GAP_MODEL,
-      max_tokens: 400,
-      system: `You are an expert analyst.\nYou will be given chapter context and recent student responses.\n\nTask:\n- Identify concepts still missing or misunderstood\n- Return ONLY a concise bullet list of missing concepts\n\nChapter context:\n${trimContext(chapterPrompt, MAX_GAP_CONTEXT_CHARS)}`,
+      max_tokens: 300,
+      system: `You are a strict but fair tutor evaluating a student's answer.\n\nChapter context:\n${trimContext(chapterContent, MAX_GAP_CONTEXT_CHARS)}`,
       messages: [
         {
           role: 'user',
-          content: `Recent student responses:\n\n${userMessages.join('\n\n')}`,
+          content: `Question asked: ${question}\n\nStudent's answer: ${answer}\n\nRate the answer quality on a scale of 0–3:\n0 = wrong, off-topic, or no real attempt\n1 = partially correct but missing key ideas\n2 = mostly correct with good understanding\n3 = excellent, demonstrates clear mastery\n\nAlso briefly list any concepts still not demonstrated (bullet points, or "none").\n\nRespond in exactly this format:\nSCORE: <0|1|2|3>\nGAPS:\n<bullet list or "none">`,
         },
       ],
     });
 
-    const first = response.content[0];
-    const gapText = first?.type === 'text' ? first.text : '';
-    return { gapText, remainingCount: countGapItems(gapText) };
+    const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
+    const scoreMatch = text.match(/SCORE:\s*([0-3])/);
+    const score = scoreMatch ? (parseInt(scoreMatch[1]) as 0 | 1 | 2 | 3) : 1;
+    const gapsMatch = text.match(/GAPS:\s*([\s\S]*)/);
+    const gapText = gapsMatch ? gapsMatch[1].trim() : '';
+    return { score, gapText };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[session/gap] Claude gap analysis failed, using empty gap:', msg);
-    return { gapText: '', remainingCount: 0 };
+    console.error('[session/score] Scoring failed, defaulting to 1:', err instanceof Error ? err.message : err);
+    return { score: 1, gapText: '' };
   }
 }
 
-function formatGapContext(gapText: string, remainingCount: number): string {
-  if (!gapText || remainingCount === 0) return '';
+// Points awarded per score tier (out of 100 total)
+const POINTS_PER_SCORE: Record<0 | 1 | 2 | 3, number> = { 0: 0, 1: 5, 2: 12, 3: 20 };
+
+function formatGapContext(gapText: string): string {
+  if (!gapText || gapText.toLowerCase() === 'none') return '';
   return `\n\n--- KNOWLEDGE GAP ANALYSIS ---\nConcepts the student has NOT yet demonstrated understanding of:\n${gapText}\n\nFocus your next question on one of these gaps. Do not re-ask concepts already understood.\n--- END ANALYSIS ---`;
 }
 
@@ -166,39 +161,21 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
       { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' },
     ];
 
-    const userMessages = allMessages
-      .filter((m) => m.role === 'user')
-      .map((m) => m.content)
-      .slice(-MAX_GAP_USER_MESSAGES);
+    // Find the last question the tutor asked (to score the student's answer against)
+    const existingAssistantMessages = existingMessages.filter((m) => m.role === 'assistant');
+    const lastQuestion = existingAssistantMessages[existingAssistantMessages.length - 1]?.content ?? '';
 
-    const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
+    const { score, gapText } = await scoreAnswer(
+      reviewSession.chapter_content,
+      lastQuestion,
+      sanitizedContent
+    );
 
-    const hasGapSignal = remainingCount > 0 || gapText.trim().length > 0;
-    let totalConcepts = reviewSession.total_concepts;
-    if (totalConcepts === 0) {
-      // If gap extraction is noisy/empty, start from a stable baseline so mastery can still progress.
-      totalConcepts = hasGapSignal ? Math.max(remainingCount, 1) : 8;
-      await supabase
-        .from('review_sessions')
-        .update({ total_concepts: totalConcepts })
-        .eq('id', reviewKey)
-        .eq('total_concepts', 0);
-    }
+    // Increment mastery by points earned this turn; never go backward; cap at 95 until [MASTERY_REACHED]
+    const points = POINTS_PER_SCORE[score];
+    const masteryPercent = Math.min(95, reviewSession.mastery_percent + points);
 
-    let rawMasteryPercent = 0;
-    if (hasGapSignal) {
-      const boundedRemaining = Math.min(Math.max(remainingCount, 0), totalConcepts);
-      rawMasteryPercent = Math.round(((totalConcepts - boundedRemaining) / totalConcepts) * 100);
-    } else {
-      // Fallback progression: advance with turns when the gap model cannot produce structured counts.
-      const userTurnCount = userMessages.length;
-      rawMasteryPercent = Math.min(95, Math.round((userTurnCount / totalConcepts) * 100));
-    }
-
-    // Never let mastery go backward; cap at 95 until [MASTERY_REACHED] confirms 100.
-    const masteryPercent = Math.min(95, Math.max(rawMasteryPercent, reviewSession.mastery_percent));
-
-    const gapContext = formatGapContext(gapText, remainingCount);
+    const gapContext = formatGapContext(gapText);
 
     const apiMessages = allMessages
       .slice(-MAX_CHAT_TURNS * 2)
