@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useAppContext } from '../../context/AppContext';
 import { FileList } from './FileList';
@@ -11,14 +12,17 @@ function generateId(): string {
 
 export function UploadZone() {
   const { state, dispatch } = useAppContext();
+  const error = state.uploadError;
   const { uploadFiles } = useChatSession();
   const hasFile = state.uploadedFiles.length > 0;
+  const [isStarting, setIsStarting] = useState(false);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/pdf': ['.pdf'] },
     maxFiles: 1,
     disabled: hasFile,
     onDrop(acceptedFiles) {
+      dispatch({ type: 'SET_UPLOAD_ERROR', error: null });
       const newFiles: UploadedFile[] = acceptedFiles.map((file) => ({
         id: generateId(),
         file,
@@ -30,10 +34,15 @@ export function UploadZone() {
   });
 
   async function handleStart() {
-    if (state.uploadedFiles.length === 0) return;
+    if (state.uploadedFiles.length === 0 || isStarting) return;
+    dispatch({ type: 'SET_UPLOAD_ERROR', error: null });
+    setIsStarting(true);
     dispatch({ type: 'SET_PHASE', phase: 'loading' });
-    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-    await uploadFiles(state.uploadedFiles);
+    try {
+      await uploadFiles(state.uploadedFiles);
+    } catch (err) {
+      setIsStarting(false);
+    }
   }
 
   return (
@@ -45,10 +54,10 @@ export function UploadZone() {
       >
         <input {...getInputProps()} />
         <div className="text-4xl mb-3">📚</div>
-        <p className="font-sketch text-xl text-[#452B2B]">
+        <p className="font-sketch text-xl text-brown">
           {isDragActive ? 'Drop it here!' : 'Drop your textbook here'}
         </p>
-        <p className="font-body text-sm text-[#6B4545] mt-1">
+        <p className="font-body text-sm text-brown-light mt-1">
           PDF only
         </p>
         {hasFile && (
@@ -59,15 +68,22 @@ export function UploadZone() {
       {/* File list */}
       <FileList />
 
+      {/* Error message */}
+      {error && (
+        <div className="rounded-xl border-2 border-red-400 bg-red-50 px-4 py-3 text-center">
+          <p className="font-sketch text-base text-red-600">⚠ {error}</p>
+        </div>
+      )}
+
       {/* Start button */}
       <Button
         variant="primary"
         size="lg"
         className="mt-2 w-full"
-        disabled={state.uploadedFiles.length === 0}
+        disabled={state.uploadedFiles.length === 0 || isStarting}
         onClick={handleStart}
       >
-        Start Teaching Pimpy!
+        {isStarting ? 'Processing...' : 'Start Teaching Pimpy!'}
       </Button>
     </div>
   );

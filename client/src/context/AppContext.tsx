@@ -12,6 +12,8 @@ const initialState: AppState = {
   silenceStartedAt: null,
   summary: null,
   viewingHistory: false,
+  masteryPercent: 0,
+  uploadError: null,
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -84,6 +86,24 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, silenceStartedAt: action.time };
     case 'SET_SUMMARY':
       return { ...state, summary: action.summary };
+    case 'SET_UPLOAD_ERROR':
+      return { ...state, uploadError: action.error };
+    case 'UPDATE_MASTERY': {
+      if (action.masteryReached) {
+        return {
+          ...state,
+          masteryPercent: 100,
+          phase: 'complete',
+          summary: {
+            masteryScore: 100,
+            strongTopics: [],
+            weakTopics: [],
+            totalQuestions: state.session?.messages.filter((m) => m.role === 'user').length ?? 0,
+          },
+        };
+      }
+      return { ...state, masteryPercent: action.masteryPercent };
+    }
     case 'START_NEW_CHAT': {
       const prevSession = state.session;
       return {
@@ -95,6 +115,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         silenceStartedAt: null,
         summary: null,
         viewingHistory: false,
+        masteryPercent: 0,
+        uploadError: null,
         chatHistory: prevSession && !state.viewingHistory
           ? [prevSession, ...state.chatHistory]
           : state.chatHistory,

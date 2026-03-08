@@ -1,8 +1,6 @@
 import { useAppContext } from '../context/AppContext';
-import { startSession, sendMessage, finishSession } from '../api/client';
+import { startSession, sendMessage } from '../api/client';
 import type { UploadedFile, Message, ChatSession } from '../types';
-
-const MAX_FOLLOW_UPS = 5;
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -11,24 +9,37 @@ function generateId(): string {
 export function useChatSession() {
   const { state, dispatch } = useAppContext();
 
-  async function uploadFiles(files: UploadedFile[]) {
+  async function uploadFiles(files: UploadedFile[]): Promise<void> {
     dispatch({ type: 'SET_PHASE', phase: 'generating' });
 
-    const { sessionId, firstQuestion } = await startSession(
-      files.map((f) => ({ name: f.name, type: f.type }))
-    );
+    const file = files[0]?.file;
+    if (!file) throw new Error('No file provided');
 
-    const firstMessage: Message = {
+    let reviewKey: string;
+    let topicTitle: string;
+    let recallPrompt: string;
+
+    try {
+      ({ reviewKey, topicTitle, recallPrompt } = await startSession(file));
+    } catch (err) {
+      dispatch({ type: 'SET_PHASE', phase: 'upload' });
+      dispatch({ type: 'SET_UPLOAD_ERROR', error: err instanceof Error ? err.message : 'Something went wrong. Please try again.' });
+      throw err;
+    }
+
+    // Recall prompt comes directly from the server — no fake init message needed
+    const recallMessage: Message = {
       id: generateId(),
       role: 'assistant',
-      content: firstQuestion,
+      content: recallPrompt,
       timestamp: new Date(),
     };
 
     const session: ChatSession = {
-      id: sessionId,
-      messages: [firstMessage],
-      topic: 'Study Session',
+      id: reviewKey,
+      reviewKey,
+      messages: [recallMessage],
+      topic: topicTitle,
       createdAt: new Date(),
     };
 
@@ -37,12 +48,10 @@ export function useChatSession() {
     dispatch({ type: 'SET_SILENCE_START', time: new Date() });
   }
 
-  async function submitAnswer(content: string) {
+  async function submitAnswer(content: string): Promise<void> {
     if (!state.session) return;
 
-    // Count follow-up questions already asked (AI messages after the first)
-    const followUpsSoFar = state.session.messages.filter((m) => m.role === 'assistant').length - 1;
-    const isLastQuestion = followUpsSoFar >= MAX_FOLLOW_UPS - 1;
+    const { reviewKey } = state.session;
 
     const userMessage: Message = {
       id: generateId(),
@@ -54,40 +63,36 @@ export function useChatSession() {
     dispatch({ type: 'APPEND_MESSAGE', message: userMessage });
     dispatch({ type: 'SET_PHASE', phase: 'ai_thinking' });
 
-    if (isLastQuestion) {
-      // Skip follow-up — go straight to summary
-      const summary = await finishSession(state.session.id);
-      dispatch({
-        type: 'SET_SUMMARY',
-        summary: {
-          masteryScore: summary.masteryScore,
-          strongTopics: summary.strongTopics,
-          weakTopics: summary.weakTopics,
-          totalQuestions: MAX_FOLLOW_UPS,
-        },
-      });
-      dispatch({ type: 'SET_PHASE', phase: 'complete' });
-    } else {
-      const streamingId = generateId();
-      const streamingMessage: Message = {
-        id: streamingId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-        isStreaming: true,
-      };
+    const streamingId = generateId();
+    const streamingMessage: Message = {
+      id: streamingId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      isStreaming: true,
+    };
 
-      dispatch({ type: 'APPEND_MESSAGE', message: streamingMessage });
+    dispatch({ type: 'APPEND_MESSAGE', message: streamingMessage });
 
+    try {
       let accumulated = '';
-      await sendMessage(state.session.id, content, (chunk) => {
+      const { masteryReached, masteryPercent } = await sendMessage(reviewKey, content, (chunk) => {
         accumulated += chunk;
         dispatch({ type: 'UPDATE_STREAMING_MESSAGE', id: streamingId, content: accumulated });
       });
 
       dispatch({ type: 'FINISH_STREAMING', id: streamingId });
+      dispatch({ type: 'UPDATE_MASTERY', masteryReached, masteryPercent });
+
+      if (!masteryReached) {
+        dispatch({ type: 'SET_PHASE', phase: 'questioning' });
+        dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      }
+    } catch (err) {
+      // Clear the stuck streaming bubble and restore the input bar
+      dispatch({ type: 'FINISH_STREAMING', id: streamingId });
       dispatch({ type: 'SET_PHASE', phase: 'questioning' });
-      dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      throw err;
     }
   }
 

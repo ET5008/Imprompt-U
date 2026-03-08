@@ -19,7 +19,7 @@ const upload = multer({
       cb(null, `${Date.now()}-${randomUUID()}-${sanitizeFilename(file.originalname)}`),
   }),
   limits: {
-    fileSize: 25 * 1024 * 1024,
+    fileSize: 50 * 1024 * 1024,
   },
 });
 
@@ -168,6 +168,12 @@ function extractTocEntries(pageTexts: string[]): TocEntry[] {
 
   if (tocStart < 0) {
     return [];
+  }
+
+  // TEMP DEBUG
+  console.log('[TOC DEBUG] tocStart page index:', tocStart);
+  for (let dbg = tocStart; dbg < Math.min(tocStart + 3, pageTexts.length); dbg++) {
+    console.log(`[TOC DEBUG] page ${dbg}:\n${pageTexts[dbg]}\n---`);
   }
 
   const tocEntries: TocEntry[] = [];
@@ -334,9 +340,11 @@ router.post('/', upload.single('pdf'), async (req, res) => {
 
   try {
     const bucket = process.env.SUPABASE_PDF_BUCKET || 'textbooks';
+    console.log('[upload] Upload request received');
     const source = await resolvePdfSource(req, bucket);
     storagePath = source.storagePath;
     localUploadPath = source.localUploadPath;
+    console.log(`[upload] Resolved PDF source — file: "${source.filename}", sessionId: ${source.sessionId}`);
 
     // 0) If this is a fresh upload, stream temp file to Storage first
     if (source.shouldUploadToStorage) {
@@ -344,6 +352,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
         throw new Error('Uploaded file path missing.');
       }
 
+      console.log(`[upload] Step 0: Uploading PDF to Supabase Storage — path: ${source.storagePath}`);
       const readStream = fs.createReadStream(source.localUploadPath);
       const { error: storageError } = await supabase.storage
         .from(bucket)
@@ -357,26 +366,37 @@ router.post('/', upload.single('pdf'), async (req, res) => {
       }
 
       createdStorageObject = true;
+      console.log('[upload] Step 0: Storage upload complete — generating signed URL');
       source.parseUrl = await createSignedPdfUrl(bucket, source.storagePath);
+      console.log('[upload] Step 0: Signed URL created');
     }
 
     // 1) Extract per-page text from signed URL (avoids backend full-file download buffer)
+    console.log('[upload] Step 1: Extracting text from PDF (via signed URL)...');
     const { pageTexts, numPages } = await extractPdfPagesFromUrl(source.parseUrl);
     if (pageTexts.length === 0) {
       return res.status(400).json({
         error: 'Could not extract enough text from this PDF.',
       });
     }
+    console.log(`[upload] Step 1: Extracted ${numPages} pages`);
 
     // 2) Detect where printed numeric book page numbering starts and map TOC pages to PDF pages
     const pageOffset = detectBookToPdfOffset(pageTexts);
+    console.log(`[upload] Step 2: Detected book-to-PDF page offset: ${pageOffset}`);
+
     const tocEntries = extractTocEntries(pageTexts);
+    console.log(`[upload] Step 2: Extracted ${tocEntries.length} TOC entries`);
+
     const mappedEntries = mapTocToPdfPages(tocEntries, pageOffset, numPages);
+    console.log(`[upload] Step 2: Mapped ${mappedEntries.length} TOC entries to PDF pages`);
+
     const topics = buildTopicsFromTocEntries(pageTexts, mappedEntries);
+    console.log(`[upload] Step 2: Built ${topics.length} topics from TOC`);
 
     if (topics.length === 0) {
       return res.status(400).json({
-        error: 'Could not build chapter topics from table of contents.',
+        error: 'This PDF doesn\'t have a recognizable Table of Contents. Please upload a textbook with a formatted Table of Contents (e.g. "Chapter 1 ... 5").',
       });
     }
 
@@ -384,6 +404,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     if (source.existingTextbook) {
       textbookId = source.existingTextbook.id;
 
+      console.log(`[upload] Step 4: Updating existing textbook record (id: ${textbookId})`);
       const { error: textbookUpdateError } = await supabase
         .from('textbooks')
         .update({
@@ -394,7 +415,9 @@ router.post('/', upload.single('pdf'), async (req, res) => {
       if (textbookUpdateError) {
         throw new Error(`Failed to update textbook record: ${textbookUpdateError.message}`);
       }
+      console.log('[upload] Step 4: Textbook record updated');
     } else {
+      console.log(`[upload] Step 4: Inserting new textbook record — file: "${source.filename}"`);
       const { data: textbook, error: textbookError } = await supabase
         .from('textbooks')
         .insert({
@@ -414,6 +437,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
 
       textbookId = textbook.id;
       createdTextbookRow = true;
+      console.log(`[upload] Step 4: Textbook record inserted (id: ${textbookId})`);
     }
 
     if (!textbookId) {
@@ -421,6 +445,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     }
 
     // 5) Replace existing topics for this textbook
+    console.log(`[upload] Step 5: Deleting existing topics for textbook (id: ${textbookId})`);
     const { error: deleteTopicsError } = await supabase
       .from('topics')
       .delete()
@@ -429,6 +454,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     if (deleteTopicsError) {
       throw new Error(`Failed to clear existing topics: ${deleteTopicsError.message}`);
     }
+    console.log('[upload] Step 5: Existing topics deleted');
 
     // 6) Insert new topic rows
     const topicRows = topics.map((topic, index) => ({
@@ -439,6 +465,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
       content: topic.content,
     }));
 
+    console.log(`[upload] Step 6: Inserting ${topicRows.length} topic rows into database`);
     const { data: savedTopics, error: topicsError } = await supabase
       .from('topics')
       .insert(topicRows)
@@ -448,6 +475,7 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     if (topicsError) {
       throw new Error(`Failed to store topics: ${topicsError.message}`);
     }
+    console.log(`[upload] Step 6: Inserted ${savedTopics?.length ?? 0} topics — upload complete`);
 
     return res.status(200).json({
       sessionId: source.sessionId,
@@ -508,7 +536,7 @@ router.post('/from-db', async (req, res) => {
 
     if (topics.length === 0) {
       return res.status(400).json({
-        error: 'Could not build chapter topics from table of contents.',
+        error: 'This PDF doesn\'t have a recognizable Table of Contents. Please upload a textbook with a formatted Table of Contents (e.g. "Chapter 1 ... 5").',
       });
     }
 

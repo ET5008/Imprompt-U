@@ -56,7 +56,9 @@ ${topic.content}
     return;
   }
 
-  res.status(201).json({ reviewKey: reviewSession.id });
+  const recallPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${topic.title}** — don't look anything up, just share what comes to mind.`;
+
+  res.status(201).json({ reviewKey: reviewSession.id, recallPrompt });
 });
 
 export default sessionStartupRouter;
