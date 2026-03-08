@@ -88,7 +88,7 @@ function formatGapContext(gapText: string, score: 0 | 1 | 2 | 3): string {
   const hasGaps = gapText && gapText.toLowerCase() !== 'none' && gapText.trim().length > 0;
   const gapBlock = hasGaps
     ? `\nConcepts not yet demonstrated:\n${gapText}\n\nAsk about the FIRST unmastered concept in this list.`
-    : '\nAll listed concepts appear understood. Ask a final synthesis question or emit [MASTERY_REACHED] if truly complete.';
+    : '\nAll listed concepts appear understood. Emit [MASTERY_REACHED] now unless there is a critical concept you have not touched at all.';
   return `\n\n--- TURN ASSESSMENT ---\n${scoreGuidance}${gapBlock}\n--- END ASSESSMENT ---`;
 }
 
