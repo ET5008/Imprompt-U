@@ -2,6 +2,10 @@ import { createContext, useContext, useReducer } from 'react';
 import type { ReactNode } from 'react';
 import type { AppState, AppAction, Theme } from '../types';
 
+function generateId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
 const initialState: AppState = {
   phase: 'upload',
   theme: 'ice-cream',
@@ -12,6 +16,11 @@ const initialState: AppState = {
   silenceStartedAt: null,
   summary: null,
   viewingHistory: false,
+  chapters: [],
+  currentChapter: null,
+  currentFileName: '',
+  currentTextbookId: null,
+  textbookHistory: [],
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -85,7 +94,19 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_SUMMARY':
       return { ...state, summary: action.summary };
     case 'START_NEW_CHAT': {
-      const prevSession = state.session;
+      let newTextbookHistory = state.textbookHistory;
+      if (state.chapters.length > 0) {
+        if (state.currentTextbookId) {
+          newTextbookHistory = state.textbookHistory.map((s) =>
+            s.id === state.currentTextbookId ? { ...s, chapters: state.chapters } : s
+          );
+        } else {
+          newTextbookHistory = [
+            { id: generateId(), fileName: state.currentFileName, chapters: state.chapters, createdAt: new Date() },
+            ...state.textbookHistory,
+          ];
+        }
+      }
       return {
         ...state,
         phase: 'upload',
@@ -95,11 +116,60 @@ function appReducer(state: AppState, action: AppAction): AppState {
         silenceStartedAt: null,
         summary: null,
         viewingHistory: false,
-        chatHistory: prevSession && !state.viewingHistory
-          ? [prevSession, ...state.chatHistory]
-          : state.chatHistory,
+        chapters: [],
+        currentChapter: null,
+        currentFileName: '',
+        currentTextbookId: null,
+        textbookHistory: newTextbookHistory,
       };
     }
+    case 'SET_CHAPTERS':
+      return {
+        ...state,
+        phase: 'chapters',
+        chapters: action.chapters,
+        currentFileName: action.fileName,
+        currentTextbookId: null,
+      };
+    case 'SELECT_CHAPTER':
+      return {
+        ...state,
+        currentChapter: action.chapter,
+        viewingHistory: false,
+      };
+    case 'BACK_TO_CHAPTERS': {
+      const updatedChapters = state.currentChapter && state.summary
+        ? state.chapters.map((c) =>
+            c.id === state.currentChapter!.id
+              ? { ...c, masteryScore: state.summary!.masteryScore, completed: state.summary!.masteryScore >= 90 }
+              : c
+          )
+        : state.chapters;
+      const updatedHistory = state.currentTextbookId
+        ? state.textbookHistory.map((s) =>
+            s.id === state.currentTextbookId ? { ...s, chapters: updatedChapters } : s
+          )
+        : state.textbookHistory;
+      return {
+        ...state,
+        phase: 'chapters',
+        session: null,
+        summary: null,
+        currentChapter: null,
+        chapters: updatedChapters,
+        textbookHistory: updatedHistory,
+      };
+    }
+    case 'RESTORE_TEXTBOOK':
+      return {
+        ...state,
+        chapters: action.session.chapters,
+        currentFileName: action.session.fileName,
+        currentTextbookId: action.session.id,
+        phase: 'chapters',
+        sidebarOpen: false,
+        viewingHistory: false,
+      };
     default:
       return state;
   }

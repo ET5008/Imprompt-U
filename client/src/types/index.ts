@@ -3,6 +3,7 @@ export type PimpyEmotion = 'happy' | 'smiling' | 'thinking' | 'sad' | 'crying' |
 export type AppPhase =
   | 'upload'
   | 'loading'
+  | 'chapters'
   | 'generating'
   | 'questioning'
   | 'typing'
@@ -10,6 +11,21 @@ export type AppPhase =
   | 'complete';
 
 export type Theme = 'ice-cream' | 'dark';
+
+export interface Chapter {
+  id: string;
+  title: string;
+  subject: string;
+  masteryScore?: number;
+  completed: boolean;
+}
+
+export interface TextbookSession {
+  id: string;
+  fileName: string;
+  chapters: Chapter[];
+  createdAt: Date;
+}
 
 export type MessageRole = 'user' | 'assistant';
 
@@ -56,6 +72,11 @@ export interface AppState {
   silenceStartedAt: Date | null;
   summary: SessionSummary | null;
   viewingHistory: boolean;
+  chapters: Chapter[];
+  currentChapter: Chapter | null;
+  currentFileName: string;
+  currentTextbookId: string | null;
+  textbookHistory: TextbookSession[];
 }
 
 export type AppAction =
@@ -73,4 +94,8 @@ export type AppAction =
   | { type: 'RESTORE_SESSION'; session: ChatSession }
   | { type: 'SET_THEME'; theme: Theme }
   | { type: 'SET_SILENCE_START'; time: Date | null }
-  | { type: 'SET_SUMMARY'; summary: SessionSummary };
+  | { type: 'SET_SUMMARY'; summary: SessionSummary }
+  | { type: 'SET_CHAPTERS'; chapters: Chapter[]; fileName: string }
+  | { type: 'SELECT_CHAPTER'; chapter: Chapter }
+  | { type: 'BACK_TO_CHAPTERS' }
+  | { type: 'RESTORE_TEXTBOOK'; session: TextbookSession };

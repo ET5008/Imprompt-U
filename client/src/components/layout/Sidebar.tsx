@@ -40,28 +40,40 @@ export function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
-        {state.chatHistory.length === 0 ? (
+        {state.textbookHistory.length === 0 ? (
           <p className="font-body text-sm text-[#6B4545] text-center mt-8">
             No previous sessions yet.
           </p>
         ) : (
-          state.chatHistory.map((session) => (
-            <button
-              key={session.id}
-              onClick={() => dispatch({ type: 'RESTORE_SESSION', session })}
-              className="w-full text-left sketch-card p-3 hover:bg-[#F3C8D7]/40 transition-colors cursor-pointer"
-            >
-              <p className="font-sketch text-base font-semibold text-[#452B2B] truncate">
-                {session.topic ?? 'Study Session'}
-              </p>
-              <p className="font-body text-xs text-[#6B4545] mt-0.5">
-                {formatDate(session.createdAt)}
-              </p>
-              <p className="font-body text-xs text-[#6B4545]">
-                {session.messages.length} message{session.messages.length !== 1 ? 's' : ''}
-              </p>
-            </button>
-          ))
+          state.textbookHistory.map((session) => {
+            const completed = session.chapters.filter((c) => c.completed).length;
+            const avgMastery =
+              completed > 0
+                ? Math.round(
+                    session.chapters
+                      .filter((c) => c.completed)
+                      .reduce((sum, c) => sum + (c.masteryScore ?? 0), 0) / completed
+                  )
+                : null;
+            return (
+              <button
+                key={session.id}
+                onClick={() => dispatch({ type: 'RESTORE_TEXTBOOK', session })}
+                className="w-full text-left sketch-card p-3 hover:bg-[#F3C8D7]/40 transition-colors cursor-pointer"
+              >
+                <p className="font-sketch text-base font-semibold text-[#452B2B] truncate">
+                  {session.fileName}
+                </p>
+                <p className="font-body text-xs text-[#6B4545] mt-0.5">
+                  {formatDate(session.createdAt)}
+                </p>
+                <p className="font-body text-xs text-[#6B4545]">
+                  {completed}/{session.chapters.length} chapters
+                  {avgMastery !== null ? ` · ${avgMastery}% mastery` : ''}
+                </p>
+              </button>
+            );
+          })
         )}
       </div>
 

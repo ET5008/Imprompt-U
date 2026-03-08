@@ -2,7 +2,6 @@ import { useDropzone } from 'react-dropzone';
 import { useAppContext } from '../../context/AppContext';
 import { FileList } from './FileList';
 import { Button } from '../ui/Button';
-import { useChatSession } from '../../hooks/useChatSession';
 import type { UploadedFile } from '../../types';
 
 function generateId(): string {
@@ -11,7 +10,6 @@ function generateId(): string {
 
 export function UploadZone() {
   const { state, dispatch } = useAppContext();
-  const { uploadFiles } = useChatSession();
   const hasFile = state.uploadedFiles.length > 0;
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -32,8 +30,18 @@ export function UploadZone() {
   async function handleStart() {
     if (state.uploadedFiles.length === 0) return;
     dispatch({ type: 'SET_PHASE', phase: 'loading' });
+    // TODO: replace timeout with real backend PDF parsing call that returns chapters
     await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-    await uploadFiles(state.uploadedFiles);
+    dispatch({
+      type: 'SET_CHAPTERS',
+      fileName: state.uploadedFiles[0]?.name ?? 'Textbook.pdf',
+      chapters: [
+        { id: '1', title: 'Introduction', subject: 'Overview', completed: false },
+        { id: '2', title: 'Core Concepts', subject: 'Fundamentals', completed: false },
+        { id: '3', title: 'Methods & Approaches', subject: 'Methodology', completed: false },
+        { id: '4', title: 'Case Studies', subject: 'Applications', completed: false },
+      ],
+    });
   }
 
   return (
