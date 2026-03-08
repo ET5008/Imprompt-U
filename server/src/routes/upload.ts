@@ -19,7 +19,7 @@ const upload = multer({
       cb(null, `${Date.now()}-${randomUUID()}-${sanitizeFilename(file.originalname)}`),
   }),
   limits: {
-    fileSize: 50 * 1024 * 1024,
+    fileSize: 100 * 1024 * 1024,
   },
 });
 

@@ -76,9 +76,20 @@ async function scoreAnswer(
 // Points awarded per score tier (out of 100 total)
 const POINTS_PER_SCORE: Record<0 | 1 | 2 | 3, number> = { 0: 0, 1: 5, 2: 12, 3: 20 };
 
-function formatGapContext(gapText: string): string {
-  if (!gapText || gapText.toLowerCase() === 'none') return '';
-  return `\n\n--- KNOWLEDGE GAP ANALYSIS ---\nConcepts the student has NOT yet demonstrated understanding of:\n${gapText}\n\nFocus your next question on one of these gaps. Do not re-ask concepts already understood.\n--- END ANALYSIS ---`;
+const SCORE_LABELS: Record<0 | 1 | 2 | 3, string> = {
+  0: 'The student gave a wrong or off-topic answer. Gently redirect with a simpler question on the same concept.',
+  1: 'The student partially understood. Probe deeper on the missing parts before moving on.',
+  2: 'The student mostly understood. Briefly affirm and move to the next gap.',
+  3: 'The student answered excellently. Affirm and move to the next gap.',
+};
+
+function formatGapContext(gapText: string, score: 0 | 1 | 2 | 3): string {
+  const scoreGuidance = SCORE_LABELS[score];
+  const hasGaps = gapText && gapText.toLowerCase() !== 'none' && gapText.trim().length > 0;
+  const gapBlock = hasGaps
+    ? `\nConcepts not yet demonstrated:\n${gapText}\n\nAsk about the FIRST unmastered concept in this list.`
+    : '\nAll listed concepts appear understood. Ask a final synthesis question or emit [MASTERY_REACHED] if truly complete.';
+  return `\n\n--- TURN ASSESSMENT ---\n${scoreGuidance}${gapBlock}\n--- END ASSESSMENT ---`;
 }
 
 async function streamSocraticResponse(
@@ -175,7 +186,7 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
     const points = POINTS_PER_SCORE[score];
     const masteryPercent = Math.min(95, reviewSession.mastery_percent + points);
 
-    const gapContext = formatGapContext(gapText);
+    const gapContext = formatGapContext(gapText, score);
 
     const apiMessages = allMessages
       .slice(-MAX_CHAT_TURNS * 2)
