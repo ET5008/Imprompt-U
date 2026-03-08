@@ -185,15 +185,18 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
         .eq('total_concepts', 0);
     }
 
-    let masteryPercent = 0;
+    let rawMasteryPercent = 0;
     if (hasGapSignal) {
       const boundedRemaining = Math.min(Math.max(remainingCount, 0), totalConcepts);
-      masteryPercent = Math.round(((totalConcepts - boundedRemaining) / totalConcepts) * 100);
+      rawMasteryPercent = Math.round(((totalConcepts - boundedRemaining) / totalConcepts) * 100);
     } else {
       // Fallback progression: advance with turns when the gap model cannot produce structured counts.
       const userTurnCount = userMessages.length;
-      masteryPercent = Math.min(95, Math.round((userTurnCount / totalConcepts) * 100));
+      rawMasteryPercent = Math.min(95, Math.round((userTurnCount / totalConcepts) * 100));
     }
+
+    // Never let mastery go backward; cap at 95 until [MASTERY_REACHED] confirms 100.
+    const masteryPercent = Math.min(95, Math.max(rawMasteryPercent, reviewSession.mastery_percent));
 
     const gapContext = formatGapContext(gapText, remainingCount);
 
@@ -208,22 +211,23 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
       res
     );
 
-    const masteryReached = fullResponse.includes('[MASTERY_REACHED]');
+    const masteryReached = fullResponse.includes('[MASTERY_REACHED]') || masteryPercent >= 100;
     const cleanedResponse = fullResponse.replace(/\[MASTERY_REACHED\]/g, '').trimEnd();
+    const finalMasteryPercent = masteryReached ? 100 : masteryPercent;
 
     await Promise.all([
       supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: cleanedResponse }),
       supabase
         .from('review_sessions')
         .update({
-          mastery_percent: masteryReached ? 100 : masteryPercent,
+          mastery_percent: finalMasteryPercent,
           ...(masteryReached ? { mastery_reached: true } : {}),
         })
         .eq('id', reviewKey),
     ]);
 
     res.write(
-      `data: ${JSON.stringify({ done: true, masteryReached, masteryPercent: masteryReached ? 100 : masteryPercent })}\n\n`
+      `data: ${JSON.stringify({ done: true, masteryReached, masteryPercent: finalMasteryPercent })}\n\n`
     );
     res.end();
   } catch (err) {
