@@ -35,8 +35,14 @@ interface GapResult {
   remainingCount: number;
 }
 
-function countBullets(text: string): number {
-  return text.split('\n').filter((line) => /^[-*]/.test(line.trim())).length;
+function countGapItems(text: string): number {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  // Accept bullets, numbered lists, and short standalone concept lines.
+  return lines.filter((line) => /^([-*•]|\d+[.)])\s+/.test(line) || line.split(' ').length <= 12).length;
 }
 
 function trimContext(text: string, maxChars: number): string {
@@ -67,7 +73,7 @@ async function buildKnowledgeGap(chapterPrompt: string, userMessages: string[]):
 
     const first = response.content[0];
     const gapText = first?.type === 'text' ? first.text : '';
-    return { gapText, remainingCount: countBullets(gapText) };
+    return { gapText, remainingCount: countGapItems(gapText) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[session/gap] Claude gap analysis failed, using empty gap:', msg);
@@ -167,9 +173,11 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
 
     const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
 
+    const hasGapSignal = remainingCount > 0 || gapText.trim().length > 0;
     let totalConcepts = reviewSession.total_concepts;
-    if (totalConcepts === 0 && remainingCount > 0) {
-      totalConcepts = remainingCount;
+    if (totalConcepts === 0) {
+      // If gap extraction is noisy/empty, start from a stable baseline so mastery can still progress.
+      totalConcepts = hasGapSignal ? Math.max(remainingCount, 1) : 8;
       await supabase
         .from('review_sessions')
         .update({ total_concepts: totalConcepts })
@@ -177,8 +185,15 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
         .eq('total_concepts', 0);
     }
 
-    const masteryPercent =
-      totalConcepts > 0 ? Math.round(((totalConcepts - remainingCount) / totalConcepts) * 100) : 0;
+    let masteryPercent = 0;
+    if (hasGapSignal) {
+      const boundedRemaining = Math.min(Math.max(remainingCount, 0), totalConcepts);
+      masteryPercent = Math.round(((totalConcepts - boundedRemaining) / totalConcepts) * 100);
+    } else {
+      // Fallback progression: advance with turns when the gap model cannot produce structured counts.
+      const userTurnCount = userMessages.length;
+      masteryPercent = Math.min(95, Math.round((userTurnCount / totalConcepts) * 100));
+    }
 
     const gapContext = formatGapContext(gapText, remainingCount);
 

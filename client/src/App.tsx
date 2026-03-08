@@ -233,8 +233,9 @@ function MainContent() {
               </motion.button>
 
               {/* Live mastery progress */}
-              {!state.viewingHistory && state.masteryPercent > 0 && (
+              {!state.viewingHistory && (
                 <div className="absolute top-3 right-4 flex items-center gap-2">
+                  <span className="font-body text-xs text-brown-light">Mastery</span>
                   <span className="font-sketch text-sm text-brown">{state.masteryPercent}%</span>
                   <div className="w-24 h-2 rounded-full bg-mint overflow-hidden border border-brown">
                     <motion.div

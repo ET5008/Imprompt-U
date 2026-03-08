@@ -4,13 +4,17 @@ import { useAppContext } from '../../context/AppContext';
 import { useChatSession } from '../../hooks/useChatSession';
 import type { Chapter } from '../../types';
 
+function isChapterHeader(chapter: Chapter): boolean {
+  return /^chapter\s+[0-9ivxlcdm]+\b/i.test(chapter.title.trim());
+}
+
 export function ChapterSelection() {
   const { state, dispatch } = useAppContext();
   const { startChapterSession } = useChatSession();
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   async function handleChapterClick(chapter: Chapter) {
-    if (state.viewingHistory || loadingId) return;
+    if (state.viewingHistory || loadingId || isChapterHeader(chapter)) return;
     setLoadingId(chapter.id);
     dispatch({ type: 'SELECT_CHAPTER', chapter });
     try {
@@ -20,7 +24,9 @@ export function ChapterSelection() {
     }
   }
 
-  const studiedChapters = state.chapters.filter((c) => c.masteryScore !== undefined);
+  const studiedChapters = state.chapters.filter(
+    (c) => !isChapterHeader(c) && c.masteryScore !== undefined
+  );
   const avgMastery =
     studiedChapters.length > 0
       ? Math.round(
@@ -43,51 +49,69 @@ export function ChapterSelection() {
       </div>
 
       <div className="flex flex-col gap-4 w-full max-w-2xl">
-        {state.chapters.map((chapter, i) => (
-          <motion.button
-            key={chapter.id}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.07, duration: 0.3 }}
-            onClick={() => handleChapterClick(chapter)}
-            disabled={!!loadingId || state.viewingHistory}
-            className={`sketch-card p-5 text-left transition-colors ${
-              state.viewingHistory || loadingId
-                ? 'cursor-default opacity-70'
-                : 'hover:bg-[#F3C8D7]/40 cursor-pointer'
-            } ${loadingId === chapter.id ? 'opacity-50' : ''}`}
-          >
-            <p className="font-body text-xs text-[#6B4545] uppercase tracking-wide mb-1">
-              {chapter.subject}
-            </p>
-            <p className="font-sketch text-xl text-[#452B2B] leading-tight">
-              {loadingId === chapter.id ? 'Starting...' : chapter.title}
-            </p>
+        {state.chapters.map((chapter, i) => {
+          const header = isChapterHeader(chapter);
 
-            {chapter.masteryScore !== undefined ? (
-              <div className="mt-3">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-body text-xs text-[#6B4545]">Mastery</span>
-                  <span className="font-sketch text-sm text-[#452B2B]">{chapter.masteryScore}%</span>
+          if (header) {
+            return (
+              <motion.div
+                key={chapter.id}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.07, duration: 0.3 }}
+                className="mt-2 border-b-2 border-[#452B2B]/30 pb-1"
+              >
+                <p className="font-sketch text-2xl text-[#452B2B]">{chapter.title}</p>
+              </motion.div>
+            );
+          }
+
+          return (
+            <motion.button
+              key={chapter.id}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.07, duration: 0.3 }}
+              onClick={() => handleChapterClick(chapter)}
+              disabled={!!loadingId || state.viewingHistory}
+              className={`sketch-card p-5 text-left transition-colors ${
+                state.viewingHistory || loadingId
+                  ? 'cursor-default opacity-70'
+                  : 'hover:bg-[#F3C8D7]/40 cursor-pointer'
+              } ${loadingId === chapter.id ? 'opacity-50' : ''}`}
+            >
+              <p className="font-body text-xs text-[#6B4545] uppercase tracking-wide mb-1">
+                {chapter.subject}
+              </p>
+              <p className="font-sketch text-xl text-[#452B2B] leading-tight">
+                {loadingId === chapter.id ? 'Starting...' : chapter.title}
+              </p>
+
+              {chapter.masteryScore !== undefined ? (
+                <div className="mt-3">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-body text-xs text-[#6B4545]">Mastery</span>
+                    <span className="font-sketch text-sm text-[#452B2B]">{chapter.masteryScore}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-[#DDE9DE] overflow-hidden border border-[#452B2B]">
+                    <motion.div
+                      className="h-full bg-[#452B2B] rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${chapter.masteryScore}%` }}
+                      transition={{ duration: 0.6, ease: 'easeOut', delay: i * 0.07 + 0.3 }}
+                    />
+                  </div>
+                  {chapter.completed
+                    ? <p className="font-body text-xs text-green-600 mt-1.5">Completed</p>
+                    : <p className="font-body text-xs text-[#6B4545] mt-1.5">Keep studying -- need 90% to complete</p>
+                  }
                 </div>
-                <div className="h-2 rounded-full bg-[#DDE9DE] overflow-hidden border border-[#452B2B]">
-                  <motion.div
-                    className="h-full bg-[#452B2B] rounded-full"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${chapter.masteryScore}%` }}
-                    transition={{ duration: 0.6, ease: 'easeOut', delay: i * 0.07 + 0.3 }}
-                  />
-                </div>
-                {chapter.completed
-                  ? <p className="font-body text-xs text-green-600 mt-1.5">Completed</p>
-                  : <p className="font-body text-xs text-[#6B4545] mt-1.5">Keep studying -- need 90% to complete</p>
-                }
-              </div>
-            ) : (
-              <p className="font-body text-xs text-[#6B4545] mt-3">Not studied yet</p>
-            )}
-          </motion.button>
-        ))}
+              ) : (
+                <p className="font-body text-xs text-[#6B4545] mt-3">Not studied yet</p>
+              )}
+            </motion.button>
+          );
+        })}
       </div>
 
       <button

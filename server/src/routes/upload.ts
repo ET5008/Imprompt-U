@@ -198,7 +198,7 @@ function parseTocEntriesFromTextBlock(pageText: string): TocEntry[] {
   const compact = pageText.replace(/\s+/g, ' ').trim();
 
   const regex =
-    /(chapter\s+[0-9ivxlcdm]+[^0-9]{0,120}?|[0-9]+(?:\.[0-9]+){0,3}\s+[A-Za-z][^0-9]{0,120}?)(?:\.{2,}|\s{2,}|[-_]{2,})\s*([0-9]{1,4})/gi;
+    /(chapter\s+[0-9ivxlcdm]+[^0-9]{0,120}?|[0-9]+(?:[.,][0-9]+){0,4}\s+[A-Za-z][^0-9]{0,120}?)(?:\.{2,}|\s{2,}|[-_]{2,})\s*([0-9]{1,4})/gi;
 
   let match: RegExpExecArray | null;
   while ((match = regex.exec(compact)) !== null) {
@@ -213,6 +213,17 @@ function parseTocEntriesFromTextBlock(pageText: string): TocEntry[] {
 
 function countLikelyTocEntries(pageText: string): number {
   return parseTocLinesFromPage(pageText).length + parseTocEntriesFromTextBlock(pageText).length;
+}
+
+function isLikelyStructuredTocEntry(title: string): boolean {
+  const normalized = cleanLine(title);
+  if (!normalized) return false;
+
+  // Keep both chapter-level and subchapter-level TOC rows.
+  if (/\bchapter\s+[0-9ivxlcdm]+\b/i.test(normalized)) return true;
+  if (/^[0-9]+(?:[.,][0-9]+){0,4}\s+\S+/.test(normalized)) return true;
+
+  return false;
 }
 
 function extractTocEntries(pageTexts: string[]): TocEntry[] {
@@ -263,16 +274,9 @@ function extractTocEntries(pageTexts: string[]): TocEntry[] {
 
   const entries = Array.from(deduped.values());
 
-  // Prefer chapter-level TOC rows over sub-section rows to avoid topic explosion.
-  const chapterOnly = entries.filter((entry) => {
-    const title = entry.title.toLowerCase();
-    return (
-      /\bchapter\s+[0-9ivxlcdm]+\b/i.test(entry.title) ||
-      /^\d+\s+[a-z]/i.test(title)
-    );
-  });
-
-  return chapterOnly.length >= 2 ? chapterOnly : entries;
+  // Keep structured entries (chapter + subchapter numbering) so topics include 1.1/1.2/etc.
+  const structured = entries.filter((entry) => isLikelyStructuredTocEntry(entry.title));
+  return structured.length >= 3 ? structured : entries;
 }
 
 function mapTocToPdfPages(tocEntries: TocEntry[], offset: number, totalPages: number): TocEntry[] {
@@ -284,14 +288,15 @@ function mapTocToPdfPages(tocEntries: TocEntry[], offset: number, totalPages: nu
     .filter((entry) => entry.pdfStartPage >= 1 && entry.pdfStartPage <= totalPages)
     .sort((a, b) => a.pdfStartPage - b.pdfStartPage);
 
-  const uniqueByStartPage = new Map<number, TocEntry>();
+  const uniqueByStartPageAndTitle = new Map<string, TocEntry>();
   for (const entry of mapped) {
-    if (!uniqueByStartPage.has(entry.pdfStartPage)) {
-      uniqueByStartPage.set(entry.pdfStartPage, entry);
+    const key = `${entry.pdfStartPage}|${entry.title.toLowerCase()}`;
+    if (!uniqueByStartPageAndTitle.has(key)) {
+      uniqueByStartPageAndTitle.set(key, entry);
     }
   }
 
-  return Array.from(uniqueByStartPage.values()).sort((a, b) => a.pdfStartPage - b.pdfStartPage);
+  return Array.from(uniqueByStartPageAndTitle.values()).sort((a, b) => a.pdfStartPage - b.pdfStartPage);
 }
 
 function buildTopicsFromTocEntries(pageTexts: string[], mappedEntries: TocEntry[]): ParsedTopic[] {
