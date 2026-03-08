@@ -20,7 +20,7 @@ function MainContent() {
 
   const emotion = usePimpyState(state.phase, lastMessage, state.silenceStartedAt);
   const isUploadPhase = state.phase === 'upload';
-  const isLoadingPhase = state.phase === 'loading';
+  const isLoadingPhase = state.phase === 'loading' || state.phase === 'generating';
   const isChaptersPhase = state.phase === 'chapters';
   const isCompletePhase = state.phase === 'complete';
 
@@ -43,7 +43,9 @@ function MainContent() {
               <Pimpy emotion="happy" size={260} />
             </motion.div>
             <div className="text-center">
-              <p className="font-sketch text-4xl text-brown">Reading your notes...</p>
+              <p className="font-sketch text-4xl text-brown">
+                {state.phase === 'generating' ? 'Getting ready...' : 'Reading your notes...'}
+              </p>
               <p className="font-body text-sm text-brown-light mt-2">Pimpy is studying hard!</p>
             </div>
           </motion.div>

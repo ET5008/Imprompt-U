@@ -170,12 +170,6 @@ function extractTocEntries(pageTexts: string[]): TocEntry[] {
     return [];
   }
 
-  // TEMP DEBUG
-  console.log('[TOC DEBUG] tocStart page index:', tocStart);
-  for (let dbg = tocStart; dbg < Math.min(tocStart + 3, pageTexts.length); dbg++) {
-    console.log(`[TOC DEBUG] page ${dbg}:\n${pageTexts[dbg]}\n---`);
-  }
-
   const tocEntries: TocEntry[] = [];
   const tocEnd = Math.min(maxScan, tocStart + 10);
 

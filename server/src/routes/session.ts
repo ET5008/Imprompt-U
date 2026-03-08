@@ -109,19 +109,6 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
   try {
     const allMessages = [...reviewSession.messages, { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' }];
     const userMessages = allMessages.filter(m => m.role === 'user').map(m => m.content);
-    const isFirstTurn = userMessages.length === 1;
-
-    if (isFirstTurn) {
-      const topicTitle = reviewSession.topics?.title ?? 'this topic';
-      const openingPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${topicTitle}** — don't look anything up, just share what comes to mind.`;
-      res.write(`data: ${JSON.stringify({ chunk: openingPrompt })}\n\n`);
-
-      await supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: openingPrompt });
-
-      res.write(`data: ${JSON.stringify({ done: true, masteryReached: false, masteryPercent: 0 })}\n\n`);
-      res.end();
-      return;
-    }
 
     const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
 

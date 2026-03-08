@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import { useAppContext } from '../../context/AppContext';
 import { FileList } from './FileList';
 import { Button } from '../ui/Button';
+import { useChatSession } from '../../hooks/useChatSession';
 import type { UploadedFile } from '../../types';
 
 function generateId(): string {

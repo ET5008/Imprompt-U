@@ -27,34 +27,44 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+export async function uploadPdf(file: File): Promise<Topic[]> {
+  const form = new FormData();
+  form.append('pdf', file);
+
+  const res = await fetch(`${BASE_URL}/upload`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Upload failed');
+  }
+
+  const data = (await res.json()) as { topics: Topic[] };
+  if (!data.topics?.length) throw new Error('No topics found in uploaded PDF');
+  return data.topics;
+}
+
+export async function startSessionForTopic(topicId: string): Promise<{ reviewKey: string; recallPrompt: string }> {
+  const res = await fetch(`${BASE_URL}/session/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topicId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to create session');
+  }
+  return res.json();
+}
+
 export async function startSession(file: File): Promise<StartSessionResponse> {
   return startSessionReal(file);
 }
 
-// STUB: real SSE streaming suspended for UI testing
 export async function sendMessage(
-  _reviewKey: string,
-  _content: string,
+  reviewKey: string,
+  content: string,
   onChunk: (chunk: string) => void
 ): Promise<SendMessageResult> {
-  await new Promise((r) => setTimeout(r, 800));
-
-  const replies = [
-    "Hmm, interesting! Can you explain that a bit more — what's the underlying reason for that?",
-    "Good start! Now, how does that connect to the broader concept you've been studying?",
-    "That's partially right. Think about the edge cases — when might that not hold true?",
-    "Nice explanation! Can you give me a concrete real-world example of that?",
-    "You're getting there. What would happen if you changed one of those key variables?",
-  ];
-  const reply = replies[Math.floor(Math.random() * replies.length)];
-
-  const words = reply.split(' ');
-  for (const word of words) {
-    await new Promise((r) => setTimeout(r, 55));
-    onChunk(word + ' ');
-  }
-
-  return { masteryReached: false, masteryPercent: 0 };
+  return sendMessageReal(reviewKey, content, onChunk);
 }
 
 // --- Real implementations (restore when backend is ready) ---

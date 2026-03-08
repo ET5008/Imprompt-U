@@ -99,7 +99,7 @@ export type AppAction =
   | { type: 'SET_SILENCE_START'; time: Date | null }
   | { type: 'SET_SUMMARY'; summary: SessionSummary }
   | { type: 'UPDATE_MASTERY'; masteryPercent: number; masteryReached: boolean }
-  | { type: 'SET_UPLOAD_ERROR'; error: string | null };
+  | { type: 'SET_UPLOAD_ERROR'; error: string | null }
   | { type: 'SET_CHAPTERS'; chapters: Chapter[]; fileName: string }
   | { type: 'SELECT_CHAPTER'; chapter: Chapter }
   | { type: 'BACK_TO_CHAPTERS' }

@@ -1,6 +1,6 @@
 import { useAppContext } from '../context/AppContext';
-import { startSession, sendMessage } from '../api/client';
-import type { UploadedFile, Message, ChatSession } from '../types';
+import { uploadPdf, startSessionForTopic, sendMessage } from '../api/client';
+import type { UploadedFile, Message, ChatSession, Chapter } from '../types';
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -9,43 +9,61 @@ function generateId(): string {
 export function useChatSession() {
   const { state, dispatch } = useAppContext();
 
+  // Step 1: Upload PDF, extract topics, show chapter selection
   async function uploadFiles(files: UploadedFile[]): Promise<void> {
-    dispatch({ type: 'SET_PHASE', phase: 'generating' });
-
     const file = files[0]?.file;
     if (!file) throw new Error('No file provided');
 
-    let reviewKey: string;
-    let topicTitle: string;
-    let recallPrompt: string;
-
     try {
-      ({ reviewKey, topicTitle, recallPrompt } = await startSession(file));
+      const topics = await uploadPdf(file);
+
+      const chapters: Chapter[] = topics.map((t) => ({
+        id: t.id,
+        title: t.title,
+        subject: t.chapter ?? 'General',
+        completed: false,
+      }));
+
+      dispatch({ type: 'SET_CHAPTERS', chapters, fileName: file.name });
     } catch (err) {
       dispatch({ type: 'SET_PHASE', phase: 'upload' });
-      dispatch({ type: 'SET_UPLOAD_ERROR', error: err instanceof Error ? err.message : 'Something went wrong. Please try again.' });
+      dispatch({
+        type: 'SET_UPLOAD_ERROR',
+        error: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+      });
       throw err;
     }
+  }
 
-    // Recall prompt comes directly from the server — no fake init message needed
-    const recallMessage: Message = {
-      id: generateId(),
-      role: 'assistant',
-      content: recallPrompt,
-      timestamp: new Date(),
-    };
+  // Step 2: Start a session for a selected chapter
+  async function startChapterSession(chapter: Chapter): Promise<void> {
+    dispatch({ type: 'SET_PHASE', phase: 'generating' });
 
-    const session: ChatSession = {
-      id: reviewKey,
-      reviewKey,
-      messages: [recallMessage],
-      topic: topicTitle,
-      createdAt: new Date(),
-    };
+    try {
+      const { reviewKey, recallPrompt } = await startSessionForTopic(chapter.id);
 
-    dispatch({ type: 'SET_SESSION', session });
-    dispatch({ type: 'SET_PHASE', phase: 'questioning' });
-    dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      const recallMessage: Message = {
+        id: generateId(),
+        role: 'assistant',
+        content: recallPrompt,
+        timestamp: new Date(),
+      };
+
+      const session: ChatSession = {
+        id: reviewKey,
+        reviewKey,
+        messages: [recallMessage],
+        topic: chapter.title,
+        createdAt: new Date(),
+      };
+
+      dispatch({ type: 'SET_SESSION', session });
+      dispatch({ type: 'SET_PHASE', phase: 'questioning' });
+      dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+    } catch (err) {
+      dispatch({ type: 'SET_PHASE', phase: 'chapters' });
+      throw err;
+    }
   }
 
   async function submitAnswer(content: string): Promise<void> {
@@ -89,12 +107,11 @@ export function useChatSession() {
         dispatch({ type: 'SET_SILENCE_START', time: new Date() });
       }
     } catch (err) {
-      // Clear the stuck streaming bubble and restore the input bar
       dispatch({ type: 'FINISH_STREAMING', id: streamingId });
       dispatch({ type: 'SET_PHASE', phase: 'questioning' });
       throw err;
     }
   }
 
-  return { uploadFiles, submitAnswer };
+  return { uploadFiles, startChapterSession, submitAnswer };
 }

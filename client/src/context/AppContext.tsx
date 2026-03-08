@@ -138,8 +138,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         viewingHistory: false,
         masteryPercent: 0,
         uploadError: null,
-        chatHistory: prevSession && !state.viewingHistory
-          ? [prevSession, ...state.chatHistory]
+        chatHistory: state.session && !state.viewingHistory
+          ? [state.session, ...state.chatHistory]
           : state.chatHistory,
         chapters: [],
         currentChapter: null,
