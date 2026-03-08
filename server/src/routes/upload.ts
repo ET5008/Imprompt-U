@@ -460,11 +460,14 @@ router.post('/', upload.single('pdf'), async (req, res) => {
     }));
 
     console.log(`[upload] Step 6: Inserting ${topicRows.length} topic rows into database`);
-    const { data: savedTopics, error: topicsError } = await supabase
+    const { data: insertedTopics, error: topicsError } = await supabase
       .from('topics')
       .insert(topicRows)
-      .select('id, title, chapter, topic_order')
-      .order('topic_order', { ascending: true });
+      .select('id, title, chapter, topic_order');
+
+    const savedTopics = insertedTopics
+      ? [...insertedTopics].sort((a, b) => a.topic_order - b.topic_order)
+      : null;
 
     if (topicsError) {
       throw new Error(`Failed to store topics: ${topicsError.message}`);
@@ -564,11 +567,14 @@ router.post('/from-db', async (req, res) => {
       content: topic.content,
     }));
 
-    const { data: savedTopics, error: topicsError } = await supabase
+    const { data: insertedTopics, error: topicsError } = await supabase
       .from('topics')
       .insert(topicRows)
-      .select('id, title, chapter')
-      .order('id', { ascending: true });
+      .select('id, title, chapter, topic_order');
+
+    const savedTopics = insertedTopics
+      ? [...insertedTopics].sort((a, b) => a.topic_order - b.topic_order)
+      : null;
 
     if (topicsError) {
       throw new Error(`Failed to store topics: ${topicsError.message}`);
