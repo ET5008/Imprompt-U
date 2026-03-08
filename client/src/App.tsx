@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect, useRef } from 'react';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { SidebarTrigger } from './components/layout/SidebarTrigger';
@@ -274,6 +275,29 @@ function MainContent() {
 }
 
 function AppShell() {
+  const { state, dispatch } = useAppContext();
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (state.phase === 'upload' || state.phase === 'loading') return;
+
+    function resetTimer() {
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+      idleTimer.current = setTimeout(() => {
+        dispatch({ type: 'START_NEW_CHAT' });
+      }, 30 * 1000);
+    }
+
+    const events = ['keydown'];
+    events.forEach((e) => window.addEventListener(e, resetTimer));
+    resetTimer();
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+    };
+  }, [state.phase, dispatch]);
+
   return (
     <div className="relative h-full flex flex-col">
       <SidebarTrigger />
