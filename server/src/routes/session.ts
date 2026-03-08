@@ -1,13 +1,7 @@
 import { Router, Request, Response } from 'express';
-import Anthropic from '@anthropic-ai/sdk';
 import { supabase } from '../lib/supabase';
 
 const sessionRouter = Router();
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
-const GAP_MODEL = 'claude-haiku-4-5-20251001';
 
 // --- Types ---
 
@@ -37,44 +31,10 @@ interface GapResult {
   remainingCount: number;
 }
 
-function countBullets(text: string): number {
-  return text.split('\n').filter(l => /^[-•*]/.test(l.trim())).length;
-}
-
-async function buildKnowledgeGap(chapterPrompt: string, userMessages: string[]): Promise<GapResult> {
-  if (userMessages.length === 0) return { gapText: '', remainingCount: 0 };
-
-  const response = await anthropic.messages.create({
-    model: GAP_MODEL,
-    max_tokens: 512,
-    system: [
-      {
-        type: 'text',
-        text: `You are an expert analyst. You will be given:
-1. The full text of a textbook chapter (below).
-2. Everything the student has said so far in their own words.
-
-Your job:
-- Identify what concepts from the chapter the student has demonstrated understanding of.
-- Identify what concepts the student has NOT addressed or has addressed incorrectly.
-- Return ONLY a concise bullet list of the knowledge gaps. No preamble.
-
-Chapter context:
-${chapterPrompt}`,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    messages: [
-      {
-        role: 'user',
-        content: `Here is everything the student has said so far:\n\n${userMessages.join('\n\n')}`,
-      },
-    ],
-  });
-
-  const block = response.content[0];
-  const gapText = block.type === 'text' ? block.text : '';
-  return { gapText, remainingCount: countBullets(gapText) };
+async function buildKnowledgeGap(_chapterPrompt: string, _userMessages: string[]): Promise<GapResult> {
+  // TESTING STUB: Claude calls disabled — returning empty gap to skip token usage
+  console.log('[session] [TEST STUB] buildKnowledgeGap skipped — no Claude call');
+  return { gapText: '', remainingCount: 0 };
 }
 
 function formatGapContext(gapText: string, remainingCount: number): string {
@@ -85,34 +45,16 @@ function formatGapContext(gapText: string, remainingCount: number): string {
 // --- Streaming Response ---
 
 async function streamSocraticResponse(
-  chapterPrompt: string,
-  gapContext: string,
-  apiMessages: { role: 'user' | 'assistant'; content: string }[],
+  _chapterPrompt: string,
+  _gapContext: string,
+  _apiMessages: { role: 'user' | 'assistant'; content: string }[],
   res: Response
 ): Promise<string> {
-  let fullResponse = '';
-
-  const stream = anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 1024,
-    system: [
-      {
-        type: 'text',
-        text: chapterPrompt,
-        cache_control: { type: 'ephemeral' },
-      },
-      ...(gapContext ? [{ type: 'text' as const, text: gapContext }] : []),
-    ],
-    messages: apiMessages,
-  });
-
-  stream.on('text', (chunk) => {
-    fullResponse += chunk;
-    res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
-  });
-
-  await stream.finalMessage();
-  return fullResponse;
+  // TESTING STUB: Claude calls disabled — streaming a fake response
+  console.log('[session] [TEST STUB] streamSocraticResponse skipped — no Claude call');
+  const fakeResponse = '[TEST MODE] Claude is disabled. Upload + session pipeline is working correctly.';
+  res.write(`data: ${JSON.stringify({ chunk: fakeResponse })}\n\n`);
+  return fakeResponse;
 }
 
 // --- Route ---
@@ -167,19 +109,6 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
   try {
     const allMessages = [...reviewSession.messages, { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' }];
     const userMessages = allMessages.filter(m => m.role === 'user').map(m => m.content);
-    const isFirstTurn = userMessages.length === 1;
-
-    if (isFirstTurn) {
-      const topicTitle = reviewSession.topics?.title ?? 'this topic';
-      const openingPrompt = `Before we dive in, take a moment to recall what you already know. In your own words, tell me everything you can remember about **${topicTitle}** — don't look anything up, just share what comes to mind.`;
-      res.write(`data: ${JSON.stringify({ chunk: openingPrompt })}\n\n`);
-
-      await supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: openingPrompt });
-
-      res.write(`data: ${JSON.stringify({ done: true, masteryReached: false, masteryPercent: 0 })}\n\n`);
-      res.end();
-      return;
-    }
 
     const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
 

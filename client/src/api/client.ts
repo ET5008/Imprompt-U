@@ -1,19 +1,21 @@
-// API client — stubs return mock data until backend routes are implemented.
-// Replace the stub implementations with real fetch calls when backend is ready.
-
 const BASE_URL = '/api';
 
+export interface Topic {
+  id: string;
+  title: string;
+  chapter: string | null;
+  topic_order: number;
+}
+
 export interface StartSessionResponse {
-  sessionId: string;
-  firstQuestion: string;
+  reviewKey: string;
+  topicTitle: string;
+  recallPrompt: string;
 }
 
-export interface SendMessageResponse {
-  reply: string;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export interface SendMessageResult {
+  masteryReached: boolean;
+  masteryPercent: number;
 }
 
 export async function checkHealth(): Promise<boolean> {
@@ -25,66 +27,133 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
-// STUB: replace with real FormData POST when backend route exists
-export async function startSession(
-  _files: { name: string; type: string }[]
-): Promise<StartSessionResponse> {
-  await delay(1500);
-  return {
-    sessionId: `mock-${Date.now()}`,
-    firstQuestion:
-      "In your own words, can you explain the main concept from your notes and why it matters?",
-  };
-}
+export async function uploadPdf(file: File): Promise<Topic[]> {
+  const form = new FormData();
+  form.append('pdf', file);
 
-// STUB: replace with SSE streaming fetch when backend route exists
-export async function sendMessage(
-  _sessionId: string,
-  _content: string,
-  onChunk: (chunk: string) => void
-): Promise<void> {
-  await delay(900);
-
-  // Mixed responses: ~40% confused/struggling, ~60% positive
-  const confusedReplies = [
-    "Hmm, I'm not quite following that. Can you try explaining it a different way?",
-    "Wait, I'm confused — what does that actually mean? Can you break it down more simply?",
-    "That's not quite right. Think about it again — what's the core idea here?",
-    "I don't think I understand. Can you walk me through that step by step?",
-  ];
-  const positiveReplies = [
-    "Excellent! You're really getting it. Now, what would happen if you changed one of those key factors?",
-    "Great explanation! How does this connect to something else you've studied?",
-    "Spot on! Can you give me a real-world example to make it even clearer?",
-    "Perfect, that makes sense! What do you think is the most important takeaway from this concept?",
-    "I love that answer! Can you go even deeper — what are the underlying mechanisms at work?",
-  ];
-
-  const isConfused = Math.random() < 0.4;
-  const pool = isConfused ? confusedReplies : positiveReplies;
-  const reply = pool[Math.floor(Math.random() * pool.length)];
-
-  const words = reply.split(' ');
-  for (const word of words) {
-    await delay(60);
-    onChunk(word + ' ');
+  const res = await fetch(`${BASE_URL}/upload`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Upload failed');
   }
+
+  const data = (await res.json()) as { topics: Topic[] };
+  if (!data.topics?.length) throw new Error('No topics found in uploaded PDF');
+  return data.topics;
 }
 
-export interface SessionSummaryResponse {
-  masteryScore: number;
-  strongTopics: string[];
-  weakTopics: string[];
+export async function startSessionForTopic(topicId: string): Promise<{ reviewKey: string; recallPrompt: string }> {
+  const res = await fetch(`${BASE_URL}/session/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topicId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to create session');
+  }
+  return res.json();
 }
 
-// STUB: replace with real summary endpoint when backend route exists
-export async function finishSession(
-  _sessionId: string
-): Promise<SessionSummaryResponse> {
-  await delay(600);
-  return {
-    masteryScore: Math.floor(Math.random() * 35) + 55, // 55–90
-    strongTopics: ['Core definitions', 'Cause & effect relationships', 'Real-world applications'],
-    weakTopics: ['Underlying mechanisms', 'Edge cases & exceptions'],
-  };
+export async function startSession(file: File): Promise<StartSessionResponse> {
+  return startSessionReal(file);
+}
+
+export async function sendMessage(
+  reviewKey: string,
+  content: string,
+  onChunk: (chunk: string) => void
+): Promise<SendMessageResult> {
+  return sendMessageReal(reviewKey, content, onChunk);
+}
+
+// --- Real implementations (restore when backend is ready) ---
+
+export async function startSessionReal(file: File): Promise<StartSessionResponse> {
+  const form = new FormData();
+  form.append('pdf', file);
+
+  const uploadRes = await fetch(`${BASE_URL}/upload`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!uploadRes.ok) {
+    const err = await uploadRes.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Upload failed');
+  }
+
+  const uploadData = (await uploadRes.json()) as { topics: Topic[] };
+  const firstTopic = uploadData.topics[0];
+  if (!firstTopic) throw new Error('No topics found in uploaded PDF');
+
+  const sessionRes = await fetch(`${BASE_URL}/session/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topicId: firstTopic.id }),
+  });
+
+  if (!sessionRes.ok) {
+    const err = await sessionRes.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to create session');
+  }
+
+  const sessionData = (await sessionRes.json()) as { reviewKey: string; recallPrompt: string };
+  return { reviewKey: sessionData.reviewKey, topicTitle: firstTopic.title, recallPrompt: sessionData.recallPrompt };
+}
+
+export async function sendMessageReal(
+  reviewKey: string,
+  content: string,
+  onChunk: (chunk: string) => void
+): Promise<SendMessageResult> {
+  const res = await fetch(`${BASE_URL}/session/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reviewKey, content }),
+  });
+
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Message failed');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let masteryReached = false;
+  let masteryPercent = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6).trim();
+      if (!raw) continue;
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+
+      if (typeof parsed.chunk === 'string') {
+        onChunk(parsed.chunk);
+      } else if (parsed.done === true) {
+        masteryReached = parsed.masteryReached === true;
+        masteryPercent = typeof parsed.masteryPercent === 'number' ? parsed.masteryPercent : 0;
+      } else if (typeof parsed.error === 'string') {
+        throw new Error(parsed.error);
+      }
+    }
+  }
+
+  return { masteryReached, masteryPercent };
 }

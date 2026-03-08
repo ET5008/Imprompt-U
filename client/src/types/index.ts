@@ -50,6 +50,7 @@ export interface Message {
 
 export interface ChatSession {
   id: string;
+  reviewKey: string;
   messages: Message[];
   topic?: string;
   createdAt: Date;
@@ -72,6 +73,8 @@ export interface AppState {
   silenceStartedAt: Date | null;
   summary: SessionSummary | null;
   viewingHistory: boolean;
+  masteryPercent: number;
+  uploadError: string | null;
   chapters: Chapter[];
   currentChapter: Chapter | null;
   currentFileName: string;
@@ -95,6 +98,8 @@ export type AppAction =
   | { type: 'SET_THEME'; theme: Theme }
   | { type: 'SET_SILENCE_START'; time: Date | null }
   | { type: 'SET_SUMMARY'; summary: SessionSummary }
+  | { type: 'UPDATE_MASTERY'; masteryPercent: number; masteryReached: boolean }
+  | { type: 'SET_UPLOAD_ERROR'; error: string | null }
   | { type: 'SET_CHAPTERS'; chapters: Chapter[]; fileName: string }
   | { type: 'SELECT_CHAPTER'; chapter: Chapter }
   | { type: 'BACK_TO_CHAPTERS' }
