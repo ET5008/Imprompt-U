@@ -19,7 +19,7 @@ const upload = multer({
       cb(null, `${Date.now()}-${randomUUID()}-${sanitizeFilename(file.originalname)}`),
   }),
   limits: {
-    fileSize: 25 * 1024 * 1024,
+    fileSize: 50 * 1024 * 1024,
   },
 });
 
@@ -58,6 +58,7 @@ function logStage(stage: string, details?: Record<string, unknown>): void {
     console.log(`[upload] ${stage}`, details);
     return;
   }
+
   console.log(`[upload] ${stage}`);
 }
 
@@ -449,7 +450,6 @@ async function processAndStoreTopics(source: ResolvedSource, bucket: string) {
     });
   }
 
-  // Ensure textbook row exists before topics are processed.
   let textbookId: string;
   if (source.existingTextbook) {
     textbookId = source.existingTextbook.id;

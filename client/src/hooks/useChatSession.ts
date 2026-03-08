@@ -1,8 +1,6 @@
 import { useAppContext } from '../context/AppContext';
-import { startSession, sendMessage, finishSession } from '../api/client';
-import type { UploadedFile, Message, ChatSession } from '../types';
-
-const MAX_FOLLOW_UPS = 5;
+import { uploadPdf, startSessionForTopic, sendMessage } from '../api/client';
+import type { UploadedFile, Message, ChatSession, Chapter } from '../types';
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -11,38 +9,67 @@ function generateId(): string {
 export function useChatSession() {
   const { state, dispatch } = useAppContext();
 
-  async function uploadFiles(files: UploadedFile[]) {
-    dispatch({ type: 'SET_PHASE', phase: 'generating' });
+  // Step 1: Upload PDF, extract topics, show chapter selection
+  async function uploadFiles(files: UploadedFile[]): Promise<void> {
+    const file = files[0]?.file;
+    if (!file) throw new Error('No file provided');
 
-    const { sessionId, firstQuestion } = await startSession(
-      files.map((f) => ({ name: f.name, type: f.type }))
-    );
+    try {
+      const topics = await uploadPdf(file);
 
-    const firstMessage: Message = {
-      id: generateId(),
-      role: 'assistant',
-      content: firstQuestion,
-      timestamp: new Date(),
-    };
+      const chapters: Chapter[] = topics.map((t) => ({
+        id: t.id,
+        title: t.title,
+        subject: t.chapter ?? 'General',
+        completed: false,
+      }));
 
-    const session: ChatSession = {
-      id: sessionId,
-      messages: [firstMessage],
-      topic: 'Study Session',
-      createdAt: new Date(),
-    };
-
-    dispatch({ type: 'SET_SESSION', session });
-    dispatch({ type: 'SET_PHASE', phase: 'questioning' });
-    dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      dispatch({ type: 'SET_CHAPTERS', chapters, fileName: file.name });
+    } catch (err) {
+      dispatch({ type: 'SET_PHASE', phase: 'upload' });
+      dispatch({
+        type: 'SET_UPLOAD_ERROR',
+        error: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+      });
+      throw err;
+    }
   }
 
-  async function submitAnswer(content: string) {
+  // Step 2: Start a session for a selected chapter
+  async function startChapterSession(chapter: Chapter): Promise<void> {
+    dispatch({ type: 'SET_PHASE', phase: 'generating' });
+
+    try {
+      const { reviewKey, recallPrompt } = await startSessionForTopic(chapter.id);
+
+      const recallMessage: Message = {
+        id: generateId(),
+        role: 'assistant',
+        content: recallPrompt,
+        timestamp: new Date(),
+      };
+
+      const session: ChatSession = {
+        id: reviewKey,
+        reviewKey,
+        messages: [recallMessage],
+        topic: chapter.title,
+        createdAt: new Date(),
+      };
+
+      dispatch({ type: 'SET_SESSION', session });
+      dispatch({ type: 'SET_PHASE', phase: 'questioning' });
+      dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+    } catch (err) {
+      dispatch({ type: 'SET_PHASE', phase: 'chapters' });
+      throw err;
+    }
+  }
+
+  async function submitAnswer(content: string): Promise<void> {
     if (!state.session) return;
 
-    // Count follow-up questions already asked (AI messages after the first)
-    const followUpsSoFar = state.session.messages.filter((m) => m.role === 'assistant').length - 1;
-    const isLastQuestion = followUpsSoFar >= MAX_FOLLOW_UPS - 1;
+    const { reviewKey } = state.session;
 
     const userMessage: Message = {
       id: generateId(),
@@ -54,42 +81,37 @@ export function useChatSession() {
     dispatch({ type: 'APPEND_MESSAGE', message: userMessage });
     dispatch({ type: 'SET_PHASE', phase: 'ai_thinking' });
 
-    if (isLastQuestion) {
-      // Skip follow-up — go straight to summary
-      const summary = await finishSession(state.session.id);
-      dispatch({
-        type: 'SET_SUMMARY',
-        summary: {
-          masteryScore: summary.masteryScore,
-          strongTopics: summary.strongTopics,
-          weakTopics: summary.weakTopics,
-          totalQuestions: MAX_FOLLOW_UPS,
-        },
-      });
-      dispatch({ type: 'SET_PHASE', phase: 'complete' });
-    } else {
-      const streamingId = generateId();
-      const streamingMessage: Message = {
-        id: streamingId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-        isStreaming: true,
-      };
+    const streamingId = generateId();
+    const streamingMessage: Message = {
+      id: streamingId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      isStreaming: true,
+    };
 
-      dispatch({ type: 'APPEND_MESSAGE', message: streamingMessage });
+    dispatch({ type: 'APPEND_MESSAGE', message: streamingMessage });
 
+    try {
       let accumulated = '';
-      await sendMessage(state.session.id, content, (chunk) => {
+      const { masteryReached, masteryPercent } = await sendMessage(reviewKey, content, (chunk) => {
         accumulated += chunk;
         dispatch({ type: 'UPDATE_STREAMING_MESSAGE', id: streamingId, content: accumulated });
       });
 
       dispatch({ type: 'FINISH_STREAMING', id: streamingId });
+      dispatch({ type: 'UPDATE_MASTERY', masteryReached, masteryPercent });
+
+      if (!masteryReached) {
+        dispatch({ type: 'SET_PHASE', phase: 'questioning' });
+        dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      }
+    } catch (err) {
+      dispatch({ type: 'FINISH_STREAMING', id: streamingId });
       dispatch({ type: 'SET_PHASE', phase: 'questioning' });
-      dispatch({ type: 'SET_SILENCE_START', time: new Date() });
+      throw err;
     }
   }
 
-  return { uploadFiles, submitAnswer };
+  return { uploadFiles, startChapterSession, submitAnswer };
 }

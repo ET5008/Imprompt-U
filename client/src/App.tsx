@@ -20,7 +20,7 @@ function MainContent() {
 
   const emotion = usePimpyState(state.phase, lastMessage, state.silenceStartedAt);
   const isUploadPhase = state.phase === 'upload';
-  const isLoadingPhase = state.phase === 'loading';
+  const isLoadingPhase = state.phase === 'loading' || state.phase === 'generating';
   const isChaptersPhase = state.phase === 'chapters';
   const isCompletePhase = state.phase === 'complete';
 
@@ -43,8 +43,10 @@ function MainContent() {
               <Pimpy emotion="happy" size={260} />
             </motion.div>
             <div className="text-center">
-              <p className="font-sketch text-4xl text-[#452B2B]">Reading your notes...</p>
-              <p className="font-body text-sm text-[#6B4545] mt-2">Pimpy is studying hard!</p>
+              <p className="font-sketch text-4xl text-brown">
+                {state.phase === 'generating' ? 'Getting ready...' : 'Reading your notes...'}
+              </p>
+              <p className="font-body text-sm text-brown-light mt-2">Pimpy is studying hard!</p>
             </div>
           </motion.div>
         ) : isChaptersPhase ? (
@@ -80,9 +82,9 @@ function MainContent() {
                 {state.summary.masteryScore}
                 <span className="text-3xl">%</span>
               </p>
-              <div className="mt-3 h-3 rounded-full bg-[#DDE9DE] overflow-hidden border border-[#452B2B]">
+              <div className="mt-3 h-3 rounded-full bg-mint overflow-hidden border border-brown">
                 <motion.div
-                  className="h-full bg-[#452B2B] rounded-full"
+                  className="h-full bg-brown rounded-full"
                   initial={{ width: 0 }}
                   animate={{ width: `${state.summary.masteryScore}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut', delay: 0.3 }}
@@ -90,28 +92,34 @@ function MainContent() {
               </div>
             </div>
 
-            <div className="flex gap-4 w-full max-w-md flex-wrap">
-              <div className="sketch-card flex-1 p-4 min-w-[180px]">
-                <p className="font-sketch text-lg text-[#452B2B] mb-2">Strong Topics ✓</p>
-                <ul className="space-y-1">
-                  {state.summary.strongTopics.map((t) => (
-                    <li key={t} className="font-body text-sm text-fg-primary flex items-start gap-1.5">
-                      <span className="text-green-600 shrink-0 mt-0.5">●</span>{t}
-                    </li>
-                  ))}
-                </ul>
+            {(state.summary.strongTopics.length > 0 || state.summary.weakTopics.length > 0) && (
+              <div className="flex gap-4 w-full max-w-md flex-wrap">
+                {state.summary.strongTopics.length > 0 && (
+                  <div className="sketch-card flex-1 p-4 min-w-45">
+                    <p className="font-sketch text-lg text-brown mb-2">Strong Topics ✓</p>
+                    <ul className="space-y-1">
+                      {state.summary.strongTopics.map((t) => (
+                        <li key={t} className="font-body text-sm text-fg-primary flex items-start gap-1.5">
+                          <span className="text-green-600 shrink-0 mt-0.5">●</span>{t}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {state.summary.weakTopics.length > 0 && (
+                  <div className="sketch-card flex-1 p-4 min-w-45">
+                    <p className="font-sketch text-lg text-brown mb-2">Keep Studying ✗</p>
+                    <ul className="space-y-1">
+                      {state.summary.weakTopics.map((t) => (
+                        <li key={t} className="font-body text-sm text-fg-primary flex items-start gap-1.5">
+                          <span className="text-red-500 shrink-0 mt-0.5">●</span>{t}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
-              <div className="sketch-card flex-1 p-4 min-w-[180px]">
-                <p className="font-sketch text-lg text-[#452B2B] mb-2">Keep Studying ✗</p>
-                <ul className="space-y-1">
-                  {state.summary.weakTopics.map((t) => (
-                    <li key={t} className="font-body text-sm text-fg-primary flex items-start gap-1.5">
-                      <span className="text-red-500 shrink-0 mt-0.5">●</span>{t}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
+            )}
 
             <div className="flex flex-col items-center gap-3">
               <button
@@ -176,7 +184,7 @@ function MainContent() {
                     />
                   </svg>
                   <span
-                    className="font-sketch text-base text-[#452B2B]/70 leading-tight max-w-[150px]"
+                    className="font-sketch text-base text-brown/70 leading-tight max-w-37.5"
                     style={{ transform: 'rotate(-8deg)', display: 'inline-block' }}
                   >
                     view your past study sessions!
@@ -218,10 +226,24 @@ function MainContent() {
                 title="Back to home"
                 animate={{ x: state.sidebarOpen ? 280 : 0 }}
                 transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-                className="absolute top-3 left-4 sketch-card px-3 py-1.5 font-sketch text-sm text-[#452B2B] hover:bg-[#F3C8D7]/40 transition-colors cursor-pointer flex items-center gap-1.5"
+                className="absolute top-3 left-4 sketch-card px-3 py-1.5 font-sketch text-sm text-brown hover:bg-pink/40 transition-colors cursor-pointer flex items-center gap-1.5"
               >
                 ← Home
               </motion.button>
+
+              {/* Live mastery progress */}
+              {!state.viewingHistory && state.masteryPercent > 0 && (
+                <div className="absolute top-3 right-4 flex items-center gap-2">
+                  <span className="font-sketch text-sm text-brown">{state.masteryPercent}%</span>
+                  <div className="w-24 h-2 rounded-full bg-mint overflow-hidden border border-brown">
+                    <motion.div
+                      className="h-full bg-brown rounded-full"
+                      animate={{ width: `${state.masteryPercent}%` }}
+                      transition={{ duration: 0.5, ease: 'easeOut' }}
+                    />
+                  </div>
+                </div>
+              )}
 
               <Pimpy emotion={emotion} size={300} />
               <p className="font-sketch text-xl text-fg-muted">
@@ -234,10 +256,10 @@ function MainContent() {
             </div>
 
             {/* Chat panel — bottom half */}
-            <div className="flex-1 flex flex-col min-h-0 chat-panel border-t-2 border-[#452B2B]">
+            <div className="flex-1 flex flex-col min-h-0 chat-panel border-t-2 border-brown">
               <ChatWindow />
               {state.viewingHistory ? (
-                <div className="px-4 py-3 text-center font-body text-sm text-[#6B4545] border-t border-[#452B2B]/20 bg-[#FDF6F0]/60">
+                <div className="px-4 py-3 text-center font-body text-sm text-brown-light border-t border-brown/20 bg-cream/60">
                   This is a past session — read only
                 </div>
               ) : (
