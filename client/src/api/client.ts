@@ -56,20 +56,6 @@ export async function startSessionForTopic(topicId: string): Promise<{ reviewKey
 }
 
 export async function startSession(file: File): Promise<StartSessionResponse> {
-  return startSessionReal(file);
-}
-
-export async function sendMessage(
-  reviewKey: string,
-  content: string,
-  onChunk: (chunk: string) => void
-): Promise<SendMessageResult> {
-  return sendMessageReal(reviewKey, content, onChunk);
-}
-
-// --- Real implementations (restore when backend is ready) ---
-
-export async function startSessionReal(file: File): Promise<StartSessionResponse> {
   const form = new FormData();
   form.append('pdf', file);
 
@@ -102,7 +88,7 @@ export async function startSessionReal(file: File): Promise<StartSessionResponse
   return { reviewKey: sessionData.reviewKey, topicTitle: firstTopic.title, recallPrompt: sessionData.recallPrompt };
 }
 
-export async function sendMessageReal(
+export async function sendMessage(
   reviewKey: string,
   content: string,
   onChunk: (chunk: string) => void

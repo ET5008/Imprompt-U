@@ -2,6 +2,13 @@ import { Router, Request, Response } from 'express';
 import { supabase } from '../lib/supabase';
 
 const sessionStartupRouter = Router();
+const MAX_CHAPTER_CONTEXT_CHARS = Number(process.env.MAX_CHAPTER_CONTEXT_CHARS ?? 24000);
+
+function compactAndTrim(text: string, maxChars: number): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars)}\n\n[Truncated for token budget]`;
+}
 
 sessionStartupRouter.post('/start', async (req: Request, res: Response) => {
   const { topicId } = req.body as { topicId?: string };
@@ -23,6 +30,8 @@ sessionStartupRouter.post('/start', async (req: Request, res: Response) => {
     return;
   }
 
+  const chapterContext = compactAndTrim(topic.content ?? '', MAX_CHAPTER_CONTEXT_CHARS);
+
   const systemPrompt = `You are a Socratic tutor helping a student master the following topic: "${topic.title}".
 
 Your role is to guide the student to understanding through questions — never lecture or give answers directly.
@@ -35,7 +44,7 @@ When you are fully confident the student has demonstrated mastery of all key con
 The following is the full text of the relevant chapter. Use it as your source of truth.
 
 ---
-${topic.content}
+${chapterContext}
 ---`;
 
   const { data: reviewSession, error: insertError } = await supabase
@@ -43,7 +52,7 @@ ${topic.content}
     .insert({
       topic_id: topicId,
       system_prompt: systemPrompt,
-      chapter_content: topic.content,
+      chapter_content: chapterContext,
       total_concepts: 0,
       mastery_percent: 0,
       mastery_reached: false,

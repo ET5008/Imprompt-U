@@ -74,6 +74,13 @@ function normalizeForSearch(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function sanitizeDbText(text: string): string {
+  return text
+    .replace(/\u0000/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+}
+
 function parsePrintedPageFromLine(line: string): number | null {
   const match = line.trim().match(/^[-\s]*([0-9]{1,4})[-\s]*$/);
   if (!match) {
@@ -254,17 +261,37 @@ function extractTocEntries(pageTexts: string[]): TocEntry[] {
     }
   }
 
-  return Array.from(deduped.values());
+  const entries = Array.from(deduped.values());
+
+  // Prefer chapter-level TOC rows over sub-section rows to avoid topic explosion.
+  const chapterOnly = entries.filter((entry) => {
+    const title = entry.title.toLowerCase();
+    return (
+      /\bchapter\s+[0-9ivxlcdm]+\b/i.test(entry.title) ||
+      /^\d+\s+[a-z]/i.test(title)
+    );
+  });
+
+  return chapterOnly.length >= 2 ? chapterOnly : entries;
 }
 
 function mapTocToPdfPages(tocEntries: TocEntry[], offset: number, totalPages: number): TocEntry[] {
-  return tocEntries
+  const mapped = tocEntries
     .map((entry) => ({
       ...entry,
       pdfStartPage: entry.bookPage + offset,
     }))
     .filter((entry) => entry.pdfStartPage >= 1 && entry.pdfStartPage <= totalPages)
     .sort((a, b) => a.pdfStartPage - b.pdfStartPage);
+
+  const uniqueByStartPage = new Map<number, TocEntry>();
+  for (const entry of mapped) {
+    if (!uniqueByStartPage.has(entry.pdfStartPage)) {
+      uniqueByStartPage.set(entry.pdfStartPage, entry);
+    }
+  }
+
+  return Array.from(uniqueByStartPage.values()).sort((a, b) => a.pdfStartPage - b.pdfStartPage);
 }
 
 function buildTopicsFromTocEntries(pageTexts: string[], mappedEntries: TocEntry[]): ParsedTopic[] {
@@ -497,12 +524,20 @@ async function processAndStoreTopics(source: ResolvedSource, bucket: string) {
     mappedEntries.length > 0
       ? buildTopicsFromTocEntries(pageTexts, mappedEntries)
       : buildTopicsFromChapterHeadings(pageTexts);
+  const sanitizedTopics = topics
+    .map((topic) => ({
+      title: sanitizeDbText(topic.title).trim(),
+      chapter: topic.chapter ? sanitizeDbText(topic.chapter).trim() : null,
+      content: sanitizeDbText(topic.content).trim(),
+    }))
+    .filter((topic) => topic.title.length > 0 && topic.content.length > 0);
+
   logStage('topic-build-complete', {
-    topics: topics.length,
+    topics: sanitizedTopics.length,
     strategy: mappedEntries.length > 0 ? 'toc' : 'chapter-fallback',
   });
 
-  if (topics.length === 0) {
+  if (sanitizedTopics.length === 0) {
     throw new Error('Could not build chapter topics from table of contents or chapter headings.');
   }
 
@@ -526,7 +561,7 @@ async function processAndStoreTopics(source: ResolvedSource, bucket: string) {
   }
   logStage('topics-cleared', { textbookId });
 
-  const topicRows = topics.map((topic, index) => ({
+  const topicRows = sanitizedTopics.map((topic, index) => ({
     textbook_id: textbookId,
     topic_order: index,
     title: topic.title,
@@ -534,18 +569,28 @@ async function processAndStoreTopics(source: ResolvedSource, bucket: string) {
     content: topic.content,
   }));
 
-  const { data: savedTopics, error: topicsError } = await supabase
-    .from('topics')
-    .insert(topicRows)
-    .select('id, title, chapter, topic_order')
-    .order('topic_order', { ascending: true });
+  const inserted: Array<{ id: string; title: string; chapter: string | null; topic_order: number }> = [];
+  const BATCH_SIZE = 25;
+  for (let i = 0; i < topicRows.length; i += BATCH_SIZE) {
+    const batch = topicRows.slice(i, i + BATCH_SIZE);
+    const { data: batchInserted, error: topicsError } = await supabase
+      .from('topics')
+      .insert(batch)
+      .select('id, title, chapter, topic_order');
 
-  if (topicsError) {
-    throw new Error(`Failed to store topics: ${topicsError.message}`);
+    if (topicsError) {
+      throw new Error(`Failed to store topics (batch ${Math.floor(i / BATCH_SIZE) + 1}): ${topicsError.message}`);
+    }
+
+    if (batchInserted) {
+      inserted.push(...batchInserted);
+    }
   }
+
+  const savedTopics = inserted.sort((a, b) => a.topic_order - b.topic_order);
   logStage('topics-insert-complete', {
     textbookId,
-    insertedTopics: (savedTopics ?? []).length,
+    insertedTopics: savedTopics.length,
   });
 
   logStage('process-complete', {
@@ -562,7 +607,7 @@ async function processAndStoreTopics(source: ResolvedSource, bucket: string) {
       bookPage: entry.bookPage,
       pdfStartPage: entry.pdfStartPage,
     })),
-    topics: savedTopics ?? [],
+    topics: savedTopics,
   };
 }
 

@@ -1,9 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../lib/supabase';
+import Anthropic from '@anthropic-ai/sdk';
 
 const sessionRouter = Router();
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// --- Types ---
+const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
+const GAP_MODEL = process.env.ANTHROPIC_GAP_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
+const MAX_GAP_USER_MESSAGES = Number(process.env.MAX_GAP_USER_MESSAGES ?? 6);
+const MAX_CHAT_TURNS = Number(process.env.MAX_CHAT_TURNS ?? 10);
+const MAX_GAP_CONTEXT_CHARS = Number(process.env.MAX_GAP_CONTEXT_CHARS ?? 8000);
 
 interface DbMessage {
   id: string;
@@ -21,43 +27,86 @@ interface DbReviewSession {
   mastery_percent: number;
   mastery_reached: boolean;
   topics: { title: string } | null;
-  messages: DbMessage[];
+  messages: DbMessage[] | null;
 }
-
-// --- Knowledge Gap Analysis ---
 
 interface GapResult {
   gapText: string;
   remainingCount: number;
 }
 
-async function buildKnowledgeGap(_chapterPrompt: string, _userMessages: string[]): Promise<GapResult> {
-  // TESTING STUB: Claude calls disabled — returning empty gap to skip token usage
-  console.log('[session] [TEST STUB] buildKnowledgeGap skipped — no Claude call');
-  return { gapText: '', remainingCount: 0 };
+function countBullets(text: string): number {
+  return text.split('\n').filter((line) => /^[-*]/.test(line.trim())).length;
+}
+
+function trimContext(text: string, maxChars: number): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars)} [truncated]`;
+}
+
+async function buildKnowledgeGap(chapterPrompt: string, userMessages: string[]): Promise<GapResult> {
+  if (userMessages.length === 0) return { gapText: '', remainingCount: 0 };
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is missing');
+  }
+
+  try {
+    const response = await anthropic.messages.create({
+      model: GAP_MODEL,
+      max_tokens: 400,
+      system: `You are an expert analyst.\nYou will be given chapter context and recent student responses.\n\nTask:\n- Identify concepts still missing or misunderstood\n- Return ONLY a concise bullet list of missing concepts\n\nChapter context:\n${trimContext(chapterPrompt, MAX_GAP_CONTEXT_CHARS)}`,
+      messages: [
+        {
+          role: 'user',
+          content: `Recent student responses:\n\n${userMessages.join('\n\n')}`,
+        },
+      ],
+    });
+
+    const first = response.content[0];
+    const gapText = first?.type === 'text' ? first.text : '';
+    return { gapText, remainingCount: countBullets(gapText) };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[session/gap] Claude gap analysis failed, using empty gap:', msg);
+    return { gapText: '', remainingCount: 0 };
+  }
 }
 
 function formatGapContext(gapText: string, remainingCount: number): string {
   if (!gapText || remainingCount === 0) return '';
-  return `\n\n--- KNOWLEDGE GAP ANALYSIS ---\nConcepts the student has NOT yet demonstrated understanding of:\n${gapText}\n\nFocus your next question on one of these gaps. Do not re-ask about concepts already understood.\n--- END ANALYSIS ---`;
+  return `\n\n--- KNOWLEDGE GAP ANALYSIS ---\nConcepts the student has NOT yet demonstrated understanding of:\n${gapText}\n\nFocus your next question on one of these gaps. Do not re-ask concepts already understood.\n--- END ANALYSIS ---`;
 }
-
-// --- Streaming Response ---
 
 async function streamSocraticResponse(
-  _chapterPrompt: string,
-  _gapContext: string,
-  _apiMessages: { role: 'user' | 'assistant'; content: string }[],
+  chapterPrompt: string,
+  gapContext: string,
+  apiMessages: { role: 'user' | 'assistant'; content: string }[],
   res: Response
 ): Promise<string> {
-  // TESTING STUB: Claude calls disabled — streaming a fake response
-  console.log('[session] [TEST STUB] streamSocraticResponse skipped — no Claude call');
-  const fakeResponse = '[TEST MODE] Claude is disabled. Upload + session pipeline is working correctly.';
-  res.write(`data: ${JSON.stringify({ chunk: fakeResponse })}\n\n`);
-  return fakeResponse;
-}
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is missing');
+  }
 
-// --- Route ---
+  let fullResponse = '';
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: 700,
+    system: `${chapterPrompt}${gapContext}`,
+    messages: apiMessages,
+  });
+
+  stream.on('text', (chunk) => {
+    fullResponse += chunk;
+    res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+  });
+
+  await stream.finalMessage();
+  return fullResponse;
+}
 
 sessionRouter.post('/message', async (req: Request, res: Response) => {
   const { reviewKey, content } = req.body as { reviewKey?: string; content?: string };
@@ -73,13 +122,12 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
     return;
   }
 
-  // Load review session + messages from Supabase
-  const { data: reviewSession, error: sessionError } = await supabase
+  const { data: reviewSession, error: sessionError } = (await supabase
     .from('review_sessions')
     .select('*, topics(title), messages(*)')
     .eq('id', reviewKey)
     .order('created_at', { referencedTable: 'messages', ascending: true })
-    .single() as { data: DbReviewSession | null; error: unknown };
+    .single()) as { data: DbReviewSession | null; error: unknown };
 
   if (sessionError || !reviewSession) {
     res.status(404).json({ error: 'Review session not found' });
@@ -91,7 +139,6 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
     return;
   }
 
-  // Insert user message
   const { error: insertError } = await supabase
     .from('messages')
     .insert({ review_session_id: reviewKey, role: 'user', content: sanitizedContent });
@@ -107,14 +154,19 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no');
 
   try {
-    const allMessages = [...reviewSession.messages, { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' }];
-    const userMessages = allMessages.filter(m => m.role === 'user').map(m => m.content);
+    const existingMessages = Array.isArray(reviewSession.messages) ? reviewSession.messages : [];
+    const allMessages = [
+      ...existingMessages,
+      { role: 'user' as const, content: sanitizedContent, created_at: new Date().toISOString(), id: '' },
+    ];
+
+    const userMessages = allMessages
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .slice(-MAX_GAP_USER_MESSAGES);
 
     const { gapText, remainingCount } = await buildKnowledgeGap(reviewSession.chapter_content, userMessages);
 
-    // Lock in total concepts on the second turn (first real recall turn).
-    // Use a conditional update (eq total_concepts = 0) to prevent race conditions
-    // if two requests arrive simultaneously before the baseline is written.
     let totalConcepts = reviewSession.total_concepts;
     if (totalConcepts === 0 && remainingCount > 0) {
       totalConcepts = remainingCount;
@@ -125,12 +177,14 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
         .eq('total_concepts', 0);
     }
 
-    const masteryPercent = totalConcepts > 0
-      ? Math.round(((totalConcepts - remainingCount) / totalConcepts) * 100)
-      : 0;
+    const masteryPercent =
+      totalConcepts > 0 ? Math.round(((totalConcepts - remainingCount) / totalConcepts) * 100) : 0;
 
     const gapContext = formatGapContext(gapText, remainingCount);
-    const apiMessages = allMessages.map(m => ({ role: m.role, content: m.content }));
+
+    const apiMessages = allMessages
+      .slice(-MAX_CHAT_TURNS * 2)
+      .map((m) => ({ role: m.role, content: m.content }));
 
     const fullResponse = await streamSocraticResponse(
       reviewSession.system_prompt,
@@ -142,20 +196,29 @@ sessionRouter.post('/message', async (req: Request, res: Response) => {
     const masteryReached = fullResponse.includes('[MASTERY_REACHED]');
     const cleanedResponse = fullResponse.replace(/\[MASTERY_REACHED\]/g, '').trimEnd();
 
-    // Persist assistant message and updated mastery state
     await Promise.all([
       supabase.from('messages').insert({ review_session_id: reviewKey, role: 'assistant', content: cleanedResponse }),
-      supabase.from('review_sessions').update({
-        mastery_percent: masteryReached ? 100 : masteryPercent,
-        ...(masteryReached ? { mastery_reached: true } : {}),
-      }).eq('id', reviewKey),
+      supabase
+        .from('review_sessions')
+        .update({
+          mastery_percent: masteryReached ? 100 : masteryPercent,
+          ...(masteryReached ? { mastery_reached: true } : {}),
+        })
+        .eq('id', reviewKey),
     ]);
 
-    res.write(`data: ${JSON.stringify({ done: true, masteryReached, masteryPercent: masteryReached ? 100 : masteryPercent })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ done: true, masteryReached, masteryPercent: masteryReached ? 100 : masteryPercent })}\n\n`
+    );
     res.end();
   } catch (err) {
+    const rawMessage = err instanceof Error ? err.message : 'Stream failed';
+    const errorMessage = rawMessage.toLowerCase().includes('rate limit')
+      ? 'Rate limit hit. Please wait about 60 seconds and try again.'
+      : rawMessage;
+
     console.error('[session/message] Stream error:', err);
-    res.write(`data: ${JSON.stringify({ error: 'Stream failed' })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
     res.end();
   }
 });

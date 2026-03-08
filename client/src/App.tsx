@@ -281,11 +281,11 @@ function AppShell() {
   useEffect(() => {
     if (state.phase === 'upload' || state.phase === 'loading') return;
 
-    function resetTimer() {
+    function resetTimer() { 
       if (idleTimer.current) clearTimeout(idleTimer.current);
       idleTimer.current = setTimeout(() => {
         dispatch({ type: 'START_NEW_CHAT' });
-      }, 30 * 1000);
+      }, 5 * 60 * 1000);
     }
 
     const events = ['keydown'];
