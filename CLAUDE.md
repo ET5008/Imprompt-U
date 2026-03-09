@@ -133,16 +133,15 @@ messages {
 PORT=3000
 ANTHROPIC_API_KEY=...
 ANTHROPIC_MODEL=claude-sonnet-4-6
-SUPABASE_URL=https://djsqdkwadcnvompnnktx.supabase.co
+SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 SUPABASE_PDF_BUCKET=textbooks
 
 # Optional tuning
 MAX_CHAT_TURNS=10
-MAX_GAP_USER_MESSAGES=6
 MAX_GAP_CONTEXT_CHARS=8000
 MAX_CHAPTER_CONTEXT_CHARS=24000
-ANTHROPIC_GAP_MODEL=claude-sonnet-4-6   # defaults to ANTHROPIC_MODEL
+ANTHROPIC_GAP_MODEL=claude-sonnet-4-6   # model used for scoreAnswer; defaults to ANTHROPIC_MODEL
 ```
 
 Client uses Vite proxy — no `.env` needed for the client.
@@ -193,10 +192,19 @@ The UI renders based on a phase state in `AppContext`:
 - Trimmed to `MAX_CHAPTER_CONTEXT_CHARS` (~24k chars) if needed
 
 ### Mastery Algorithm
-- After each user turn, a second Claude call analyzes remaining knowledge gaps
-- Mastery % = `(total_concepts - remaining_gaps) / total_concepts * 100`
-- Capped at 95% until Claude emits `[MASTERY_REACHED]` token → jumps to 100%
-- Fallback: linear progression by turn count if gap analysis fails
+Each user turn triggers a `scoreAnswer` call (using `GAP_MODEL`) that scores the student's answer **and** identifies remaining concept gaps in a single call.
+
+**Scoring (0–3):**
+- `0` = wrong/off-topic → +0 points
+- `1` = partial → +5 points
+- `2` = mostly correct → +12 points
+- `3` = excellent → +20 points
+
+Mastery always increases (never goes backward), capped at **95%** until `[MASTERY_REACHED]` is emitted.
+
+**Next-question guidance:** The gap list from `scoreAnswer` is injected into the tutor's system prompt as a `TURN ASSESSMENT` block, telling Claude which concept to ask about next and how to respond based on the score tier.
+
+**Completion:** Claude emits `[MASTERY_REACHED]` when core concepts are covered (bar is intentionally low — "reasonable understanding", err on the side of ending early). When all gaps are cleared, the assessment block instructs Claude to emit it immediately. Server detects the token → sets mastery to 100% and `mastery_reached = true`.
 
 ### PDF Parsing Strategy (`server/src/routes/upload.ts`)
 1. Extract text page-by-page using `pdf-parse`
